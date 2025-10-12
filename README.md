@@ -13,7 +13,7 @@ local Window = UmaLib:CreateWindow({
 -- Create tab
 local Tab = Window:CreateTab({
     Name = "Main",
-    Icon = "rbxassetid://..."
+    Icon = "rbxassetid://103792525958008"
 })
 
 -- Add elements
