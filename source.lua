@@ -1,38 +1,18 @@
 local UmaUiLibrary = {
+    Version = "2.0.0",
     Flags = {},
-    Theme = {
-        Default = {
-            TextFont = "Default",
-            TextColor = Color3.fromRGB(240, 240, 240),
-            Background = Color3.fromRGB(20, 20, 25),
-            Topbar = Color3.fromRGB(30, 30, 40),
-            Shadow = Color3.fromRGB(15, 15, 20),
-            NotificationBackground = Color3.fromRGB(15, 15, 20),
-            NotificationActionsBackground = Color3.fromRGB(220, 220, 220),
-            TabBackground = Color3.fromRGB(70, 70, 85),
-            TabStroke = Color3.fromRGB(75, 75, 90),
-            TabBackgroundSelected = Color3.fromRGB(200, 200, 220),
-            TabTextColor = Color3.fromRGB(240, 240, 240),
-            SelectedTabTextColor = Color3.fromRGB(40, 40, 50),
-            ElementBackground = Color3.fromRGB(30, 30, 40),
-            ElementBackgroundHover = Color3.fromRGB(35, 35, 45),
-            SecondaryElementBackground = Color3.fromRGB(20, 20, 25),
-            ElementStroke = Color3.fromRGB(45, 45, 55),
-            SecondaryElementStroke = Color3.fromRGB(35, 35, 45),
-            SliderBackground = Color3.fromRGB(40, 100, 150),
-            SliderProgress = Color3.fromRGB(40, 100, 150),
-            SliderStroke = Color3.fromRGB(45, 110, 165),
-            ToggleBackground = Color3.fromRGB(25, 25, 35),
-            ToggleEnabled = Color3.fromRGB(0, 140, 200),
-            ToggleDisabled = Color3.fromRGB(90, 90, 100),
-            ToggleEnabledStroke = Color3.fromRGB(0, 160, 240),
-            ToggleDisabledStroke = Color3.fromRGB(115, 115, 125),
-            ToggleEnabledOuterStroke = Color3.fromRGB(90, 90, 100),
-            ToggleDisabledOuterStroke = Color3.fromRGB(60, 60, 70),
-            InputBackground = Color3.fromRGB(25, 25, 35),
-            InputStroke = Color3.fromRGB(60, 60, 70),
-            PlaceholderColor = Color3.fromRGB(170, 170, 170)
-        }
+    Events = {
+        OnThemeChanged = Instance.new("BindableEvent"),
+        OnElementCreated = Instance.new("BindableEvent"),
+        OnWindowOpened = Instance.new("BindableEvent"),
+        OnWindowClosed = Instance.new("BindableEvent"),
+        OnConfigLoaded = Instance.new("BindableEvent")
+    },
+    Plugins = {},
+    Performance = {
+        ObjectPool = {},
+        LazyRendered = {},
+        BenchmarkMode = false
     }
 }
 
@@ -43,7 +23,7 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 
-local Release = "1.0"
+local Release = "2.0"
 local NotificationDuration = 6.5
 local UmaFolder = "UmaUI"
 local ConfigurationFolder = UmaFolder.."/Configurations"
@@ -97,7 +77,256 @@ local Hidden = false
 local Debounce = false
 local Notifications = Uma.Notifications
 
-local SelectedTheme = UmaUiLibrary.Theme.Default
+local Themes = {
+    Default = {
+        TextFont = "Gotham",
+        TextColor = Color3.fromRGB(240, 240, 240),
+        Background = Color3.fromRGB(20, 20, 25),
+        Topbar = Color3.fromRGB(30, 30, 40),
+        Shadow = Color3.fromRGB(15, 15, 20),
+        NotificationBackground = Color3.fromRGB(15, 15, 20),
+        NotificationActionsBackground = Color3.fromRGB(220, 220, 220),
+        TabBackground = Color3.fromRGB(70, 70, 85),
+        TabStroke = Color3.fromRGB(75, 75, 90),
+        TabBackgroundSelected = Color3.fromRGB(200, 200, 220),
+        TabTextColor = Color3.fromRGB(240, 240, 240),
+        SelectedTabTextColor = Color3.fromRGB(40, 40, 50),
+        ElementBackground = Color3.fromRGB(30, 30, 40),
+        ElementBackgroundHover = Color3.fromRGB(35, 35, 45),
+        SecondaryElementBackground = Color3.fromRGB(20, 20, 25),
+        ElementStroke = Color3.fromRGB(45, 45, 55),
+        SecondaryElementStroke = Color3.fromRGB(35, 35, 45),
+        SliderBackground = Color3.fromRGB(40, 100, 150),
+        SliderProgress = Color3.fromRGB(40, 100, 150),
+        SliderStroke = Color3.fromRGB(45, 110, 165),
+        ToggleBackground = Color3.fromRGB(25, 25, 35),
+        ToggleEnabled = Color3.fromRGB(0, 140, 200),
+        ToggleDisabled = Color3.fromRGB(90, 90, 100),
+        ToggleEnabledStroke = Color3.fromRGB(0, 160, 240),
+        ToggleDisabledStroke = Color3.fromRGB(115, 115, 125),
+        ToggleEnabledOuterStroke = Color3.fromRGB(90, 90, 100),
+        ToggleDisabledOuterStroke = Color3.fromRGB(60, 60, 70),
+        InputBackground = Color3.fromRGB(25, 25, 35),
+        InputStroke = Color3.fromRGB(60, 60, 70),
+        PlaceholderColor = Color3.fromRGB(170, 170, 170),
+        DropdownSelected = Color3.fromRGB(40, 40, 50),
+        DropdownUnselected = Color3.fromRGB(30, 30, 40)
+    },
+    Light = {
+        TextFont = "Gotham",
+        TextColor = Color3.fromRGB(50, 50, 50),
+        Background = Color3.fromRGB(245, 245, 245),
+        Topbar = Color3.fromRGB(230, 230, 230),
+        Shadow = Color3.fromRGB(220, 220, 220),
+        NotificationBackground = Color3.fromRGB(240, 240, 240),
+        NotificationActionsBackground = Color3.fromRGB(200, 200, 200),
+        TabBackground = Color3.fromRGB(200, 200, 200),
+        TabStroke = Color3.fromRGB(180, 180, 180),
+        TabBackgroundSelected = Color3.fromRGB(100, 150, 255),
+        TabTextColor = Color3.fromRGB(80, 80, 80),
+        SelectedTabTextColor = Color3.fromRGB(255, 255, 255),
+        ElementBackground = Color3.fromRGB(255, 255, 255),
+        ElementBackgroundHover = Color3.fromRGB(245, 245, 245),
+        SecondaryElementBackground = Color3.fromRGB(240, 240, 240),
+        ElementStroke = Color3.fromRGB(220, 220, 220),
+        SecondaryElementStroke = Color3.fromRGB(210, 210, 210),
+        SliderBackground = Color3.fromRGB(200, 200, 200),
+        SliderProgress = Color3.fromRGB(65, 150, 255),
+        SliderStroke = Color3.fromRGB(180, 180, 180),
+        ToggleBackground = Color3.fromRGB(230, 230, 230),
+        ToggleEnabled = Color3.fromRGB(65, 150, 255),
+        ToggleDisabled = Color3.fromRGB(180, 180, 180),
+        ToggleEnabledStroke = Color3.fromRGB(45, 130, 235),
+        ToggleDisabledStroke = Color3.fromRGB(150, 150, 150),
+        ToggleEnabledOuterStroke = Color3.fromRGB(180, 180, 180),
+        ToggleDisabledOuterStroke = Color3.fromRGB(140, 140, 140),
+        InputBackground = Color3.fromRGB(255, 255, 255),
+        InputStroke = Color3.fromRGB(220, 220, 220),
+        PlaceholderColor = Color3.fromRGB(150, 150, 150),
+        DropdownSelected = Color3.fromRGB(240, 240, 240),
+        DropdownUnselected = Color3.fromRGB(255, 255, 255)
+    }
+}
+
+local CurrentTheme = Themes.Default
+local Accessibility = {
+    HighContrast = false,
+    LargeFonts = false,
+    ZoomLevel = 1
+}
+
+function UmaUiLibrary:InitializeObjectPool()
+    for _, elementType in pairs({"Button", "Toggle", "Slider", "Label", "Dropdown", "Input", "Keybind"}) do
+        self.Performance.ObjectPool[elementType] = {
+            Active = {},
+            Inactive = {}
+        }
+    end
+end
+
+function UmaUiLibrary:GetFromPool(elementType)
+    local pool = self.Performance.ObjectPool[elementType]
+    if #pool.Inactive > 0 then
+        local instance = table.remove(pool.Inactive)
+        pool.Active[instance] = true
+        return instance
+    end
+    return nil
+end
+
+function UmaUiLibrary:ReturnToPool(elementType, instance)
+    local pool = self.Performance.ObjectPool[elementType]
+    pool.Active[instance] = nil
+    table.insert(pool.Inactive, instance)
+end
+
+function UmaUiLibrary:AsyncCallback(callback, ...)
+    local args = {...}
+    task.spawn(function()
+        local success, result = pcall(callback, unpack(args))
+        if not success then
+            warn("UmaUI Async Error:", result)
+        end
+    end)
+end
+
+function UmaUiLibrary:RegisterPlugin(name, pluginModule)
+    self.Plugins[name] = pluginModule
+    self.Events.OnElementCreated:Fire("PluginRegistered", name)
+end
+
+function UmaUiLibrary:SetupAccessibility()
+    UserInputService.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseWheel then
+            local ctrlPressed = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or
+                              UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+            
+            if ctrlPressed then
+                Accessibility.ZoomLevel = math.clamp(
+                    Accessibility.ZoomLevel + (input.Position.Z > 0 and 0.1 or -0.1),
+                    0.5, 2.0
+                )
+                self:ApplyZoom()
+            end
+        end
+    end)
+end
+
+function UmaUiLibrary:ApplyZoom()
+    for _, element in pairs(self.GetAllElements()) do
+        if element:FindFirstChild("Title") then
+            local baseSize = Accessibility.LargeFonts and 16 or 14
+            element.Title.TextSize = baseSize * Accessibility.ZoomLevel
+        end
+    end
+end
+
+function UmaUiLibrary:GetAllElements()
+    local elements = {}
+    for _, pool in pairs(self.Performance.ObjectPool) do
+        for element in pairs(pool.Active) do
+            table.insert(elements, element)
+        end
+    end
+    return elements
+end
+
+function UmaUiLibrary:ChangeTheme(themeName)
+    if Themes[themeName] then
+        CurrentTheme = Themes[themeName]
+        self:ApplyTheme(CurrentTheme)
+        self.Events.OnThemeChanged:Fire(themeName)
+    end
+end
+
+function UmaUiLibrary:ApplyTheme(theme)
+    for _, element in pairs(self:GetAllElements()) do
+        self:UpdateElementTheme(element, theme)
+    end
+    
+    if Main then
+        Main.BackgroundColor3 = theme.Background
+        Topbar.BackgroundColor3 = theme.Topbar
+    end
+end
+
+function UmaUiLibrary:UpdateElementTheme(element, theme)
+    if element:FindFirstChild("Title") then
+        element.Title.TextColor3 = theme.TextColor
+        element.Title.Font = theme.TextFont
+    end
+    
+    if element:IsA("Frame") then
+        element.BackgroundColor3 = theme.ElementBackground
+    end
+end
+
+function UmaUiLibrary:CreateCustomTheme(name, themeData)
+    Themes[name] = themeData
+    return true
+end
+
+function UmaUiLibrary:EncryptData(data)
+    local json = HttpService:JSONEncode(data)
+    local encrypted = ""
+    for i = 1, #json do
+        local byte = string.byte(json, i)
+        local keyByte = string.byte("uma_ui_config", (i % #"uma_ui_config") + 1)
+        encrypted = encrypted .. string.char(bit32.bxor(byte, keyByte))
+    end
+    return encrypted
+end
+
+function UmaUiLibrary:DecryptData(encrypted)
+    local decrypted = ""
+    for i = 1, #encrypted do
+        local byte = string.byte(encrypted, i)
+        local keyByte = string.byte("uma_ui_config", (i % #"uma_ui_config") + 1)
+        decrypted = decrypted .. string.char(bit32.bxor(byte, keyByte))
+    end
+    return HttpService:JSONDecode(decrypted)
+end
+
+function UmaUiLibrary:SaveConfiguration()
+    if not CEnabled then return end
+    
+    local data = {}
+    for flag, element in pairs(self.Flags) do
+        if element.Type == "ColorPicker" then
+            data[flag] = {R = element.Color.R * 255, G = element.Color.G * 255, B = element.Color.B * 255}
+        else
+            data[flag] = element.CurrentValue or element.CurrentKeybind or element.CurrentOption
+        end
+    end
+    
+    local encrypted = self:EncryptData(data)
+    writefile(ConfigurationFolder .. "/" .. CFileName .. ConfigurationExtension, encrypted)
+    
+    self.Events.OnConfigLoaded:Fire("Saved")
+end
+
+function UmaUiLibrary:LoadConfiguration()
+    if not CEnabled then return end
+    
+    local success, data = pcall(function()
+        local encrypted = readfile(ConfigurationFolder .. "/" .. CFileName .. ConfigurationExtension)
+        return self:DecryptData(encrypted)
+    end)
+    
+    if success and data then
+        for flagName, flagValue in pairs(data) do
+            if self.Flags[flagName] then
+                local element = self.Flags[flagName]
+                if element.Type == "ColorPicker" then
+                    element:Set(Color3.fromRGB(flagValue.R, flagValue.G, flagValue.B))
+                else
+                    element:Set(flagValue)
+                end
+            end
+        end
+        self.Events.OnConfigLoaded:Fire("Loaded")
+    end
+end
 
 function UmaUiLibrary:Notify(NotificationSettings)
     spawn(function()
@@ -113,9 +342,9 @@ function UmaUiLibrary:Notify(NotificationSettings)
             for _, Action in pairs(NotificationSettings.Actions) do
                 ActionCompleted = false
                 local NewAction = Notification.Actions.Template:Clone()
-                NewAction.BackgroundColor3 = SelectedTheme.NotificationActionsBackground
-                if SelectedTheme ~= UmaUiLibrary.Theme.Default then
-                    NewAction.TextColor3 = SelectedTheme.TextColor
+                NewAction.BackgroundColor3 = CurrentTheme.NotificationActionsBackground
+                if CurrentTheme ~= Themes.Default then
+                    NewAction.TextColor3 = CurrentTheme.TextColor
                 end
                 NewAction.Name = Action.Name
                 NewAction.Visible = true
@@ -126,23 +355,20 @@ function UmaUiLibrary:Notify(NotificationSettings)
                 NewAction.Size = UDim2.new(0, NewAction.TextBounds.X + 27, 0, 36)
 
                 NewAction.MouseButton1Click:Connect(function()
-                    local Success, Response = pcall(Action.Callback)
-                    if not Success then
-                        print("UmaUI | Action Error: "..tostring(Response))
-                    end
+                    self:AsyncCallback(Action.Callback)
                     ActionCompleted = true
                 end)
             end
         end
 
-        Notification.BackgroundColor3 = SelectedTheme.Background
+        Notification.BackgroundColor3 = CurrentTheme.Background
         Notification.Title.Text = NotificationSettings.Title or "Notification"
         Notification.Title.TextTransparency = 1
-        Notification.Title.TextColor3 = SelectedTheme.TextColor
+        Notification.Title.TextColor3 = CurrentTheme.TextColor
         Notification.Description.Text = NotificationSettings.Content or ""
         Notification.Description.TextTransparency = 1
-        Notification.Description.TextColor3 = SelectedTheme.TextColor
-        Notification.Icon.ImageColor3 = SelectedTheme.TextColor
+        Notification.Description.TextColor3 = CurrentTheme.TextColor
+        Notification.Icon.ImageColor3 = CurrentTheme.TextColor
         
         if NotificationSettings.Image then
             Notification.Icon.Image = "rbxassetid://"..tostring(NotificationSettings.Image) 
@@ -196,6 +422,45 @@ function UmaUiLibrary:Notify(NotificationSettings)
         
         wait(0.9)
         Notification:Destroy()
+    end)
+end
+
+function UmaUiLibrary:ShowKeybindOverlay(callback)
+    local overlay = Instance.new("ScreenGui")
+    local frame = Instance.new("Frame")
+    local label = Instance.new("TextLabel")
+    
+    frame.Size = UDim2.new(0, 300, 0, 150)
+    frame.Position = UDim2.new(0.5, -150, 0.5, -75)
+    frame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    frame.BorderSizePixel = 0
+    
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.Text = "Press any key...\n(ESC to cancel)"
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.BackgroundTransparency = 1
+    label.TextSize = 18
+    label.Font = Enum.Font.Gotham
+    label.TextWrapped = true
+    
+    frame.Parent = overlay
+    label.Parent = frame
+    overlay.Parent = CoreGui
+    
+    local connection
+    connection = UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.Escape then
+            overlay:Destroy()
+            connection:Disconnect()
+            return
+        end
+        
+        if input.KeyCode ~= Enum.KeyCode.Unknown then
+            local keyName = tostring(input.KeyCode):gsub("Enum.KeyCode.", "")
+            overlay:Destroy()
+            connection:Disconnect()
+            self:AsyncCallback(callback, keyName)
+        end
     end)
 end
 
@@ -306,83 +571,213 @@ function UmaUiLibrary:CreateWindow(Settings)
         end
 
         local Tab = {}
+        local CurrentSection = nil
 
-        function Tab:CreateButton(ButtonSettings)
-            local Button = Elements.Template.Button:Clone()
-            Button.Name = ButtonSettings.Name
-            Button.Title.Text = ButtonSettings.Name
-            Button.Visible = true
-            Button.Parent = TabPage
+        function Tab:Section(SectionName)
+            local SectionSpace = Elements.Template.SectionSpacing:Clone()
+            SectionSpace.Visible = true
+            SectionSpace.Parent = TabPage
 
-            Button.Interact.MouseButton1Click:Connect(function()
-                local Success, Response = pcall(ButtonSettings.Callback)
-                if not Success then
-                    print("UmaUI | Button Error: "..tostring(Response))
-                end
-            end)
+            local Section = Elements.Template.SectionTitle:Clone()
+            Section.Title.Text = SectionName
+            Section.Visible = true
+            Section.Parent = TabPage
 
-            return {}
-        end
+            CurrentSection = {
+                Name = SectionName,
+                Elements = {}
+            }
 
-        function Tab:CreateToggle(ToggleSettings)
-            local Toggle = Elements.Template.Toggle:Clone()
-            Toggle.Name = ToggleSettings.Name
-            Toggle.Title.Text = ToggleSettings.Name
-            Toggle.Visible = true
-            Toggle.Parent = TabPage
+            local SectionAPI = {}
 
-            Toggle.Interact.MouseButton1Click:Connect(function()
-                ToggleSettings.CurrentValue = not ToggleSettings.CurrentValue
-                
-                if ToggleSettings.CurrentValue then
-                    TweenService:Create(Toggle.Switch.Indicator, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = UDim2.new(1, -20, 0.5, 0)}):Play()
-                else
-                    TweenService:Create(Toggle.Switch.Indicator, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = UDim2.new(1, -40, 0.5, 0)}):Play()
-                end
+            function SectionAPI:Button(Name, Callback, Tooltip)
+                local Button = Elements.Template.Button:Clone()
+                Button.Name = Name
+                Button.Title.Text = Name
+                Button.Visible = true
+                Button.Parent = TabPage
 
-                local Success, Response = pcall(function()
-                    ToggleSettings.Callback(ToggleSettings.CurrentValue)
+                Button.Interact.MouseButton1Click:Connect(function()
+                    UmaUiLibrary:AsyncCallback(Callback)
                 end)
-                
-                if not Success then
-                    print("UmaUI | Toggle Error: "..tostring(Response))
-                end
-            end)
 
-            function ToggleSettings:Set(Value)
-                ToggleSettings.CurrentValue = Value
-                if Value then
-                    Toggle.Switch.Indicator.Position = UDim2.new(1, -20, 0.5, 0)
-                else
-                    Toggle.Switch.Indicator.Position = UDim2.new(1, -40, 0.5, 0)
+                if Tooltip then
+                    Button.Title.Text = Name .. " (ℹ)"
                 end
+
+                table.insert(CurrentSection.Elements, Button)
+                return SectionAPI
             end
 
-            return ToggleSettings
+            function SectionAPI:Toggle(Name, DefaultValue, Callback, Tooltip)
+                local Toggle = Elements.Template.Toggle:Clone()
+                Toggle.Name = Name
+                Toggle.Title.Text = Name
+                Toggle.Visible = true
+                Toggle.Parent = TabPage
+
+                local ToggleSettings = {
+                    Name = Name,
+                    CurrentValue = DefaultValue,
+                    Callback = Callback,
+                    Type = "Toggle"
+                }
+
+                local function updateVisuals(value)
+                    local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart)
+                    if value then
+                        TweenService:Create(Toggle.Switch.Indicator, tweenInfo, {
+                            Position = UDim2.new(1, -20, 0.5, 0),
+                            BackgroundColor3 = CurrentTheme.ToggleEnabled
+                        }):Play()
+                    else
+                        TweenService:Create(Toggle.Switch.Indicator, tweenInfo, {
+                            Position = UDim2.new(1, -40, 0.5, 0),
+                            BackgroundColor3 = CurrentTheme.ToggleDisabled
+                        }):Play()
+                    end
+                end
+
+                Toggle.Interact.MouseButton1Click:Connect(function()
+                    ToggleSettings.CurrentValue = not ToggleSettings.CurrentValue
+                    updateVisuals(ToggleSettings.CurrentValue)
+                    UmaUiLibrary:AsyncCallback(ToggleSettings.Callback, ToggleSettings.CurrentValue)
+                    UmaUiLibrary:SaveConfiguration()
+                end)
+
+                function ToggleSettings:Set(value)
+                    ToggleSettings.CurrentValue = value
+                    updateVisuals(value)
+                    UmaUiLibrary:AsyncCallback(ToggleSettings.Callback, value)
+                    UmaUiLibrary:SaveConfiguration()
+                end
+
+                updateVisuals(DefaultValue)
+
+                if Tooltip then
+                    Toggle.Title.Text = Name .. " (ℹ)"
+                end
+
+                if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
+                    UmaUiLibrary.Flags[Name] = ToggleSettings
+                end
+
+                table.insert(CurrentSection.Elements, Toggle)
+                return SectionAPI
+            end
+
+            function SectionAPI:Slider(Name, Min, Max, DefaultValue, Callback, Suffix)
+                local Slider = Elements.Template.Slider:Clone()
+                Slider.Name = Name
+                Slider.Title.Text = Name
+                Slider.Visible = true
+                Slider.Parent = TabPage
+
+                local SliderSettings = {
+                    Name = Name,
+                    Range = {Min, Max},
+                    CurrentValue = DefaultValue,
+                    Callback = Callback,
+                    Suffix = Suffix or "",
+                    Type = "Slider"
+                }
+
+                Slider.Main.Progress.Size = UDim2.new(0, Slider.Main.AbsoluteSize.X * (DefaultValue / (Max - Min)), 1, 0)
+                Slider.Main.Information.Text = tostring(DefaultValue) .. (Suffix and " " .. Suffix or "")
+
+                if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
+                    UmaUiLibrary.Flags[Name] = SliderSettings
+                end
+
+                table.insert(CurrentSection.Elements, Slider)
+                return SectionAPI
+            end
+
+            function SectionAPI:Label(Text)
+                local Label = Elements.Template.Label:Clone()
+                Label.Title.Text = Text
+                Label.Visible = true
+                Label.Parent = TabPage
+                table.insert(CurrentSection.Elements, Label)
+                return SectionAPI
+            end
+
+            function SectionAPI:Keybind(Name, DefaultKey, Callback, HoldToInteract)
+                local Keybind = Elements.Template.Keybind:Clone()
+                Keybind.Name = Name
+                Keybind.Title.Text = Name
+                Keybind.Visible = true
+                Keybind.Parent = TabPage
+
+                local KeybindSettings = {
+                    Name = Name,
+                    CurrentKeybind = DefaultKey,
+                    Callback = Callback,
+                    HoldToInteract = HoldToInteract or false,
+                    Type = "Keybind"
+                }
+
+                Keybind.KeybindFrame.KeybindBox.Text = DefaultKey
+
+                Keybind.KeybindFrame.KeybindBox.Focused:Connect(function()
+                    UmaUiLibrary:ShowKeybindOverlay(function(newKey)
+                        KeybindSettings.CurrentKeybind = newKey
+                        Keybind.KeybindFrame.KeybindBox.Text = newKey
+                        UmaUiLibrary:SaveConfiguration()
+                    end)
+                end)
+
+                if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
+                    UmaUiLibrary.Flags[Name] = KeybindSettings
+                end
+
+                table.insert(CurrentSection.Elements, Keybind)
+                return SectionAPI
+            end
+
+            return SectionAPI
         end
 
-        function Tab:CreateSlider(SliderSettings)
-            local Slider = Elements.Template.Slider:Clone()
-            Slider.Name = SliderSettings.Name
-            Slider.Title.Text = SliderSettings.Name
-            Slider.Visible = true
-            Slider.Parent = TabPage
-
-            Slider.Main.Progress.Size = UDim2.new(0, Slider.Main.AbsoluteSize.X * (SliderSettings.CurrentValue / (SliderSettings.Range[2] - SliderSettings.Range[1])), 1, 0)
-            Slider.Main.Information.Text = tostring(SliderSettings.CurrentValue) .. (SliderSettings.Suffix or "")
-
-            return SliderSettings
+        function Tab:Button(Name, Callback)
+            return self:Section(""):Button(Name, Callback)
         end
 
-        function Tab:CreateLabel(LabelText)
-            local Label = Elements.Template.Label:Clone()
-            Label.Title.Text = LabelText
-            Label.Visible = true
-            Label.Parent = TabPage
-            return {}
+        function Tab:Toggle(Name, DefaultValue, Callback)
+            return self:Section(""):Toggle(Name, DefaultValue, Callback)
         end
 
         return Tab
+    end
+
+    function Window:Notify(Title, Content, Duration, Image)
+        UmaUiLibrary:Notify({
+            Title = Title,
+            Content = Content,
+            Duration = Duration or 5,
+            Image = Image
+        })
+        return Window
+    end
+
+    function Window:Theme(ThemeName)
+        UmaUiLibrary:ChangeTheme(ThemeName)
+        return Window
+    end
+
+    function Window:Use(PluginName, ...)
+        local plugin = UmaUiLibrary.Plugins[PluginName]
+        if plugin then
+            plugin:Initialize(UmaUiLibrary, ...)
+        end
+        return Window
+    end
+
+    function Window:On(Event, Callback)
+        local bindableEvent = UmaUiLibrary.Events[Event]
+        if bindableEvent then
+            bindableEvent.Event:Connect(Callback)
+        end
+        return Window
     end
 
     wait(0.7)
@@ -396,11 +791,57 @@ function UmaUiLibrary:CreateWindow(Settings)
     TweenService:Create(Topbar, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {BackgroundTransparency = 0}):Play()
     TweenService:Create(Topbar.Title, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
 
+    UmaUiLibrary.Events.OnWindowOpened:Fire(Window)
+
     return Window
 end
 
 function UmaUiLibrary:Destroy()
+    for _, pool in pairs(self.Performance.ObjectPool) do
+        for instance in pairs(pool.Active) do
+            instance:Destroy()
+        end
+        for _, instance in ipairs(pool.Inactive) do
+            instance:Destroy()
+        end
+    end
+    
     Uma:Destroy()
+    self.Events.OnWindowClosed:Fire()
 end
+
+function UmaUiLibrary:GetPerformanceInfo()
+    if self.Performance.BenchmarkMode then
+        return {
+            FPS = self.Performance.FPS or 0,
+            ActiveObjects = 0,
+            PooledObjects = 0
+        }
+    end
+    return nil
+end
+
+UmaUiLibrary:InitializeObjectPool()
+UmaUiLibrary:SetupAccessibility()
+
+if UmaUiLibrary.Performance.BenchmarkMode then
+    UmaUiLibrary.Performance.FPS = 0
+    UmaUiLibrary.Performance.FrameCount = 0
+    UmaUiLibrary.Performance.LastTime = tick()
+    
+    RunService.Heartbeat:Connect(function()
+        UmaUiLibrary.Performance.FrameCount = UmaUiLibrary.Performance.FrameCount + 1
+        local currentTime = tick()
+        if currentTime - UmaUiLibrary.Performance.LastTime >= 1 then
+            UmaUiLibrary.Performance.FPS = UmaUiLibrary.Performance.FrameCount
+            UmaUiLibrary.Performance.FrameCount = 0
+            UmaUiLibrary.Performance.LastTime = currentTime
+        end
+    end)
+end
+
+task.delay(3, function()
+    UmaUiLibrary:LoadConfiguration()
+end)
 
 return UmaUiLibrary
