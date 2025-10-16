@@ -12,4 +12,4 @@ A modern, lightweight UI library for Roblox scripting, forked from Rayfield Inte
 
 ## Installation
 ```lua
-local UmaUiLibrary = loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/uma-ui/main/uma-ui-library.lua'))()
+local UmaUiLibrary = loadstring(game:HttpGet('https://raw.githubusercontent.com/pongb12/Uma-Ui-Library/refs/heads/main/source.lua'))()
