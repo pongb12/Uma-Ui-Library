@@ -1,8 +1,3 @@
---[[
-    Uma UI Library (UUL)
-    Kết hợp tinh túy từ Rayfield và Orion
-    Phiên bản: 1.0.0
-]]
 
 local UmaLib = {
     Flags = {},
