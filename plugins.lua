@@ -2,7 +2,7 @@ local UmaPlugins = {}
 
 UmaPlugins.ColorPicker = {
     Name = "ColorPicker",
-    Version = "1.0.0",
+    Version = "1.0.1",
     
     Initialize = function(core, parentTab)
         if not core or not parentTab then
@@ -13,22 +13,19 @@ UmaPlugins.ColorPicker = {
         local colorSection = parentTab:Section("Color Settings")
         
         local currentColor = Color3.fromRGB(255, 255, 255)
-        local colorPreview = nil
         
-
         colorSection:Button("Pick Color", function()
             if core.ShowColorPicker then
                 core:ShowColorPicker(function(newColor)
                     currentColor = newColor
                     print("Selected color:", newColor)
                     
-
                     if core.Events and core.Events.OnElementCreated then
                         core.Events.OnElementCreated:Fire("ColorChanged", newColor)
                     end
                 end)
             else
-                warn("Color picker not implemented in core")
+                warn("Color picker not available")
             end
         end)
         
@@ -40,7 +37,6 @@ UmaPlugins.ColorPicker = {
             print("Random color:", currentColor)
         end)
         
-
         colorSection:Section("Preset Colors")
         
         local presetColors = {
@@ -91,10 +87,9 @@ UmaPlugins.ColorPicker = {
     end
 }
 
-
 UmaPlugins.PresetManager = {
     Name = "PresetManager",
-    Version = "1.0.0",
+    Version = "1.0.1",
     
     Initialize = function(core, parentTab)
         if not core or not parentTab then
@@ -104,38 +99,53 @@ UmaPlugins.PresetManager = {
         
         local presets = {}
         local currentPreset = nil
+        local autoSaveEnabled = false
+        local autoSaveInterval = 60
+        local lastAutoSave = 0
+        local isSaving = false
+        local customPresetName = ""
         
         local presetSection = parentTab:Section("Preset Manager")
         
-
-        local presetNameInput = nil
         presetSection:Input("Preset Name", "", function(text)
-
+            customPresetName = text
         end, "Enter preset name...")
         
         presetSection:Button("Save Preset", function()
-            local presetName = "preset_" .. os.time()
-            
-            if core.ExportConfiguration then
-                local config = core:ExportConfiguration()
-                presets[presetName] = {
-                    Name = presetName,
-                    Config = config,
-                    Timestamp = os.time(),
-                    Date = os.date("%Y-%m-%d %H:%M:%S")
-                }
-                print("Preset saved:", presetName)
-                
-                if core.Notify then
-                    core:Notify({
-                        Title = "Preset Manager",
-                        Content = "Preset '" .. presetName .. "' saved successfully",
-                        Duration = 3
-                    })
-                end
-            else
-                warn("ExportConfiguration not found in core")
+            if isSaving then
+                print("Already saving, please wait...")
+                return
             end
+            
+            isSaving = true
+            
+            task.spawn(function()
+                local presetName = customPresetName ~= "" and customPresetName or "preset_" .. os.time()
+                
+                if core.ExportConfiguration then
+                    local config = core:ExportConfiguration()
+                    presets[presetName] = {
+                        Name = presetName,
+                        Config = config,
+                        Timestamp = os.time(),
+                        Date = os.date("%Y-%m-%d %H:%M:%S")
+                    }
+                    print("Preset saved:", presetName)
+                    
+                    if core.Notify then
+                        core:Notify({
+                            Title = "Preset Manager",
+                            Content = "Preset '" .. presetName .. "' saved successfully",
+                            Duration = 3
+                        })
+                    end
+                else
+                    warn("ExportConfiguration not found in core")
+                end
+                
+                task.wait(0.5)
+                isSaving = false
+            end)
         end)
         
         presetSection:Button("Load Latest Preset", function()
@@ -209,11 +219,6 @@ UmaPlugins.PresetManager = {
             print("========================")
         end)
         
-
-        local autoSaveEnabled = false
-        local autoSaveInterval = 60 -- seconds
-        local lastAutoSave = 0
-        
         presetSection:Toggle("Auto-Save", false, function(enabled)
             autoSaveEnabled = enabled
             if enabled then
@@ -223,26 +228,41 @@ UmaPlugins.PresetManager = {
             end
         end)
         
-
         task.spawn(function()
             local RunService = game:GetService("RunService")
-            RunService.Heartbeat:Connect(function()
-                if autoSaveEnabled then
+            local connection
+            connection = RunService.Heartbeat:Connect(function()
+                if autoSaveEnabled and not isSaving then
                     local currentTime = tick()
                     if currentTime - lastAutoSave >= autoSaveInterval then
-                        if core.ExportConfiguration then
-                            local presetName = "autosave_" .. os.time()
-                            local config = core:ExportConfiguration()
-                            presets[presetName] = {
-                                Name = presetName,
-                                Config = config,
-                                Timestamp = os.time(),
-                                Date = os.date("%Y-%m-%d %H:%M:%S"),
-                                AutoSave = true
-                            }
-                            print("Auto-saved preset:", presetName)
-                            lastAutoSave = currentTime
+                        if core.AcquireLock then
+                            core:AcquireLock("PresetAutoSave")
                         end
+                        
+                        isSaving = true
+                        
+                        task.spawn(function()
+                            if core.ExportConfiguration then
+                                local presetName = "autosave_" .. os.time()
+                                local config = core:ExportConfiguration()
+                                presets[presetName] = {
+                                    Name = presetName,
+                                    Config = config,
+                                    Timestamp = os.time(),
+                                    Date = os.date("%Y-%m-%d %H:%M:%S"),
+                                    AutoSave = true
+                                }
+                                print("Auto-saved preset:", presetName)
+                            end
+                            
+                            lastAutoSave = currentTime
+                            task.wait(0.5)
+                            isSaving = false
+                            
+                            if core.ReleaseLock then
+                                core:ReleaseLock("PresetAutoSave")
+                            end
+                        end)
                     end
                 end
             end)
@@ -252,6 +272,10 @@ UmaPlugins.PresetManager = {
             SavePreset = function(name)
                 if not name or name == "" then
                     name = "preset_" .. os.time()
+                end
+                
+                if isSaving then
+                    return false
                 end
                 
                 if core.ExportConfiguration then
@@ -309,11 +333,33 @@ UmaPlugins.PresetManager = {
                     return true
                 end
                 return false
+            end,
+            
+            CleanupOldAutoSaves = function(keepCount)
+                keepCount = keepCount or 5
+                local autoSaves = {}
+                
+                for name, preset in pairs(presets) do
+                    if preset.AutoSave then
+                        table.insert(autoSaves, preset)
+                    end
+                end
+                
+                table.sort(autoSaves, function(a, b)
+                    return a.Timestamp > b.Timestamp
+                end)
+                
+                local removed = 0
+                for i = keepCount + 1, #autoSaves do
+                    presets[autoSaves[i].Name] = nil
+                    removed = removed + 1
+                end
+                
+                return removed
             end
         }
     end
 }
-
 
 UmaPlugins.ThemeSwitcher = {
     Name = "ThemeSwitcher",
@@ -349,10 +395,9 @@ UmaPlugins.ThemeSwitcher = {
     end
 }
 
-
 UmaPlugins.ConfigIO = {
     Name = "ConfigIO",
-    Version = "1.0.0",
+    Version = "1.0.1",
     
     Initialize = function(core, parentTab)
         if not core or not parentTab then
@@ -366,22 +411,29 @@ UmaPlugins.ConfigIO = {
             if core.ExportConfiguration then
                 local config = core:ExportConfiguration()
                 local HttpService = game:GetService("HttpService")
-                local json = HttpService:JSONEncode(config)
                 
-                if setclipboard then
-                    setclipboard(json)
-                    print("Configuration exported to clipboard")
-                    
-                    if core.Notify then
-                        core:Notify({
-                            Title = "Config Export",
-                            Content = "Configuration copied to clipboard",
-                            Duration = 3
-                        })
+                local success, result = pcall(function()
+                    return HttpService:JSONEncode(config)
+                end)
+                
+                if success and result then
+                    if setclipboard then
+                        setclipboard(result)
+                        print("Configuration exported to clipboard")
+                        
+                        if core.Notify then
+                            core:Notify({
+                                Title = "Config Export",
+                                Content = "Configuration copied to clipboard",
+                                Duration = 3
+                            })
+                        end
+                    else
+                        warn("Clipboard not supported")
+                        print("Config JSON:", result)
                     end
                 else
-                    warn("Clipboard not supported")
-                    print("Config JSON:", json)
+                    warn("Failed to encode configuration")
                 end
             end
         end)
@@ -390,7 +442,23 @@ UmaPlugins.ConfigIO = {
             if getclipboard and core.ImportConfiguration then
                 local success, config = pcall(function()
                     local HttpService = game:GetService("HttpService")
-                    return HttpService:JSONDecode(getclipboard())
+                    local clipboardData = getclipboard()
+                    
+                    if not clipboardData or clipboardData == "" then
+                        error("Clipboard is empty")
+                    end
+                    
+                    if #clipboardData > 100000 then
+                        error("Clipboard data too large")
+                    end
+                    
+                    local decoded = HttpService:JSONDecode(clipboardData)
+                    
+                    if type(decoded) ~= "table" then
+                        error("Invalid config format")
+                    end
+                    
+                    return decoded
                 end)
                 
                 if success and config then
@@ -405,11 +473,11 @@ UmaPlugins.ConfigIO = {
                         })
                     end
                 else
-                    warn("Failed to import configuration")
+                    warn("Failed to import configuration:", config)
                     if core.Notify then
                         core:Notify({
                             Title = "Config Import",
-                            Content = "Failed to import - Invalid data",
+                            Content = "Failed to import - Invalid or malicious data",
                             Duration = 3
                         })
                     end
