@@ -1,5 +1,5 @@
 local UmaUiLibrary = {
-    Version = "2.0.0",
+    Version = "2.0.1",
     Flags = {},
     Events = {
         OnThemeChanged = Instance.new("BindableEvent"),
@@ -27,14 +27,15 @@ local Release = "2.0"
 local NotificationDuration = 6.5
 local UmaFolder = "UmaUI"
 local ConfigurationFolder = UmaFolder.."/Configurations"
-local ConfigurationExtension = ".uma"
+local ConfigurationExtension = ".json"
 
 local Uma = game:GetObjects("rbxassetid://10804731440")[1]
 Uma.Enabled = false
 
+-- Better GUI protection
 if gethui then
     Uma.Parent = gethui()
-elseif syn.protect_gui then 
+elseif syn and syn.protect_gui then 
     syn.protect_gui(Uma)
     Uma.Parent = CoreGui
 elseif CoreGui:FindFirstChild("RobloxGui") then
@@ -43,21 +44,21 @@ else
     Uma.Parent = CoreGui
 end
 
-if gethui then
-    for _, Interface in ipairs(gethui():GetChildren()) do
+-- Remove old instances
+local function RemoveOldInstances()
+    local parent = gethui and gethui() or CoreGui
+    for _, Interface in ipairs(parent:GetChildren()) do
         if Interface.Name == Uma.Name and Interface ~= Uma then
             Interface.Enabled = false
             Interface.Name = "UmaUI-Old"
-        end
-    end
-else
-    for _, Interface in ipairs(CoreGui:GetChildren()) do
-        if Interface.Name == Uma.Name and Interface ~= Uma then
-            Interface.Enabled = false
-            Interface.Name = "UmaUI-Old"
+            task.delay(1, function()
+                pcall(function() Interface:Destroy() end)
+            end)
         end
     end
 end
+
+RemoveOldInstances()
 
 local Camera = workspace.CurrentCamera
 local Main = Uma.Main
@@ -69,7 +70,6 @@ local TabList = Main.TabList
 Uma.DisplayOrder = 100
 LoadingFrame.Version.Text = Release
 
-local request = (syn and syn.request) or (http and http.request) or http_request
 local CFileName = nil
 local CEnabled = false
 local Minimised = false
@@ -79,7 +79,7 @@ local Notifications = Uma.Notifications
 
 local Themes = {
     Default = {
-        TextFont = "Gotham",
+        TextFont = Enum.Font.Gotham,
         TextColor = Color3.fromRGB(240, 240, 240),
         Background = Color3.fromRGB(20, 20, 25),
         Topbar = Color3.fromRGB(30, 30, 40),
@@ -113,7 +113,7 @@ local Themes = {
         DropdownUnselected = Color3.fromRGB(30, 30, 40)
     },
     Light = {
-        TextFont = "Gotham",
+        TextFont = Enum.Font.Gotham,
         TextColor = Color3.fromRGB(50, 50, 50),
         Background = Color3.fromRGB(245, 245, 245),
         Topbar = Color3.fromRGB(230, 230, 230),
@@ -155,6 +155,7 @@ local Accessibility = {
     ZoomLevel = 1
 }
 
+
 function UmaUiLibrary:InitializeObjectPool()
     for _, elementType in pairs({"Button", "Toggle", "Slider", "Label", "Dropdown", "Input", "Keybind"}) do
         self.Performance.ObjectPool[elementType] = {
@@ -166,7 +167,7 @@ end
 
 function UmaUiLibrary:GetFromPool(elementType)
     local pool = self.Performance.ObjectPool[elementType]
-    if #pool.Inactive > 0 then
+    if pool and #pool.Inactive > 0 then
         local instance = table.remove(pool.Inactive)
         pool.Active[instance] = true
         return instance
@@ -176,14 +177,16 @@ end
 
 function UmaUiLibrary:ReturnToPool(elementType, instance)
     local pool = self.Performance.ObjectPool[elementType]
-    pool.Active[instance] = nil
-    table.insert(pool.Inactive, instance)
+    if pool then
+        pool.Active[instance] = nil
+        table.insert(pool.Inactive, instance)
+    end
 end
 
 function UmaUiLibrary:AsyncCallback(callback, ...)
     local args = {...}
     task.spawn(function()
-        local success, result = pcall(callback, unpack(args))
+        local success, result = pcall(callback, table.unpack(args))
         if not success then
             warn("UmaUI Async Error:", result)
         end
@@ -213,8 +216,9 @@ function UmaUiLibrary:SetupAccessibility()
 end
 
 function UmaUiLibrary:ApplyZoom()
-    for _, element in pairs(self.GetAllElements()) do
-        if element:FindFirstChild("Title") then
+    local elements = self:GetAllElements()
+    for _, element in pairs(elements) do
+        if element and element:FindFirstChild("Title") then
             local baseSize = Accessibility.LargeFonts and 16 or 14
             element.Title.TextSize = baseSize * Accessibility.ZoomLevel
         end
@@ -224,8 +228,10 @@ end
 function UmaUiLibrary:GetAllElements()
     local elements = {}
     for _, pool in pairs(self.Performance.ObjectPool) do
-        for element in pairs(pool.Active) do
-            table.insert(elements, element)
+        if pool then
+            for element in pairs(pool.Active) do
+                table.insert(elements, element)
+            end
         end
     end
     return elements
@@ -236,6 +242,8 @@ function UmaUiLibrary:ChangeTheme(themeName)
         CurrentTheme = Themes[themeName]
         self:ApplyTheme(CurrentTheme)
         self.Events.OnThemeChanged:Fire(themeName)
+    else
+        warn("Theme '" .. tostring(themeName) .. "' not found")
     end
 end
 
@@ -251,6 +259,8 @@ function UmaUiLibrary:ApplyTheme(theme)
 end
 
 function UmaUiLibrary:UpdateElementTheme(element, theme)
+    if not element then return end
+    
     if element:FindFirstChild("Title") then
         element.Title.TextColor3 = theme.TextColor
         element.Title.Font = theme.TextFont
@@ -266,70 +276,101 @@ function UmaUiLibrary:CreateCustomTheme(name, themeData)
     return true
 end
 
-function UmaUiLibrary:EncryptData(data)
-    local json = HttpService:JSONEncode(data)
-    local encrypted = ""
-    for i = 1, #json do
-        local byte = string.byte(json, i)
-        local keyByte = string.byte("uma_ui_config", (i % #"uma_ui_config") + 1)
-        encrypted = encrypted .. string.char(bit32.bxor(byte, keyByte))
-    end
-    return encrypted
-end
-
-function UmaUiLibrary:DecryptData(encrypted)
-    local decrypted = ""
-    for i = 1, #encrypted do
-        local byte = string.byte(encrypted, i)
-        local keyByte = string.byte("uma_ui_config", (i % #"uma_ui_config") + 1)
-        decrypted = decrypted .. string.char(bit32.bxor(byte, keyByte))
-    end
-    return HttpService:JSONDecode(decrypted)
-end
 
 function UmaUiLibrary:SaveConfiguration()
     if not CEnabled then return end
     
-    local data = {}
-    for flag, element in pairs(self.Flags) do
-        if element.Type == "ColorPicker" then
-            data[flag] = {R = element.Color.R * 255, G = element.Color.G * 255, B = element.Color.B * 255}
-        else
-            data[flag] = element.CurrentValue or element.CurrentKeybind or element.CurrentOption
+    local success, err = pcall(function()
+        local data = {}
+        for flag, element in pairs(self.Flags) do
+            if element.Type == "ColorPicker" then
+                data[flag] = {
+                    R = element.Color.R * 255, 
+                    G = element.Color.G * 255, 
+                    B = element.Color.B * 255
+                }
+            else
+                data[flag] = element.CurrentValue or element.CurrentKeybind or element.CurrentOption
+            end
         end
+        
+        local json = HttpService:JSONEncode(data)
+        local filePath = ConfigurationFolder .. "/" .. CFileName .. ConfigurationExtension
+        writefile(filePath, json)
+        
+        self.Events.OnConfigLoaded:Fire("Saved", CFileName)
+    end)
+    
+    if not success then
+        warn("Failed to save configuration:", err)
     end
-    
-    local encrypted = self:EncryptData(data)
-    writefile(ConfigurationFolder .. "/" .. CFileName .. ConfigurationExtension, encrypted)
-    
-    self.Events.OnConfigLoaded:Fire("Saved")
 end
 
 function UmaUiLibrary:LoadConfiguration()
     if not CEnabled then return end
     
     local success, data = pcall(function()
-        local encrypted = readfile(ConfigurationFolder .. "/" .. CFileName .. ConfigurationExtension)
-        return self:DecryptData(encrypted)
+        local filePath = ConfigurationFolder .. "/" .. CFileName .. ConfigurationExtension
+        if not isfile(filePath) then
+            return nil
+        end
+        
+        local json = readfile(filePath)
+        return HttpService:JSONDecode(json)
     end)
     
     if success and data then
         for flagName, flagValue in pairs(data) do
             if self.Flags[flagName] then
                 local element = self.Flags[flagName]
+                pcall(function()
+                    if element.Type == "ColorPicker" then
+                        element:Set(Color3.fromRGB(flagValue.R, flagValue.G, flagValue.B))
+                    else
+                        element:Set(flagValue)
+                    end
+                end)
+            end
+        end
+        self.Events.OnConfigLoaded:Fire("Loaded", CFileName)
+    else
+        warn("Failed to load configuration")
+    end
+end
+
+function UmaUiLibrary:ExportConfiguration()
+    local data = {}
+    for flag, element in pairs(self.Flags) do
+        if element.Type == "ColorPicker" then
+            data[flag] = {
+                R = element.Color.R * 255, 
+                G = element.Color.G * 255, 
+                B = element.Color.B * 255
+            }
+        else
+            data[flag] = element.CurrentValue or element.CurrentKeybind or element.CurrentOption
+        end
+    end
+    return data
+end
+
+function UmaUiLibrary:ImportConfiguration(data)
+    for flagName, flagValue in pairs(data) do
+        if self.Flags[flagName] then
+            local element = self.Flags[flagName]
+            pcall(function()
                 if element.Type == "ColorPicker" then
                     element:Set(Color3.fromRGB(flagValue.R, flagValue.G, flagValue.B))
                 else
                     element:Set(flagValue)
                 end
-            end
+            end)
         end
-        self.Events.OnConfigLoaded:Fire("Loaded")
     end
 end
 
 function UmaUiLibrary:Notify(NotificationSettings)
-    spawn(function()
+    task.spawn(function()
         local ActionCompleted = true
         local Notification = Notifications.Template:Clone()
         Notification.Parent = Notifications
@@ -385,28 +426,28 @@ function UmaUiLibrary:Notify(NotificationSettings)
         TweenService:Create(Notification, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {BackgroundTransparency = 0.1}):Play()
         Notification:TweenPosition(UDim2.new(0.5,0,0.915,0),'Out','Quint',0.8,true)
 
-        wait(0.3)
+        task.wait(0.3)
         TweenService:Create(Notification.Icon, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {ImageTransparency = 0}):Play()
         TweenService:Create(Notification.Title, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
         TweenService:Create(Notification.Description, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0.2}):Play()
-        wait(0.2)
+        task.wait(0.2)
 
         if not NotificationSettings.Actions then
-            wait(NotificationSettings.Duration or NotificationDuration - 0.5)
+            task.wait(NotificationSettings.Duration or NotificationDuration - 0.5)
         else
-            wait(0.8)
+            task.wait(0.8)
             TweenService:Create(Notification, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 295, 0, 132)}):Play()
-            wait(0.3)
+            task.wait(0.3)
             for _, Action in ipairs(Notification.Actions:GetChildren()) do
                 if Action.ClassName == "TextButton" and Action.Name ~= "Template" then
                     TweenService:Create(Action, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {BackgroundTransparency = 0.2}):Play()
                     TweenService:Create(Action, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
-                    wait(0.05)
+                    task.wait(0.05)
                 end
             end
         end
 
-        repeat wait(0.001) until ActionCompleted
+        repeat task.wait(0.001) until ActionCompleted
 
         for _, Action in ipairs(Notification.Actions:GetChildren()) do
             if Action.ClassName == "TextButton" and Action.Name ~= "Template" then
@@ -420,7 +461,7 @@ function UmaUiLibrary:Notify(NotificationSettings)
         TweenService:Create(Notification.Description, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
         TweenService:Create(Notification.Icon, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {ImageTransparency = 1}):Play()
         
-        wait(0.9)
+        task.wait(0.9)
         Notification:Destroy()
     end)
 end
@@ -429,15 +470,22 @@ function UmaUiLibrary:ShowKeybindOverlay(callback)
     local overlay = Instance.new("ScreenGui")
     local frame = Instance.new("Frame")
     local label = Instance.new("TextLabel")
+    local corner = Instance.new("UICorner")
+    
+    overlay.Name = "KeybindOverlay"
+    overlay.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     
     frame.Size = UDim2.new(0, 300, 0, 150)
     frame.Position = UDim2.new(0.5, -150, 0.5, -75)
-    frame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    frame.BackgroundColor3 = CurrentTheme.Background
     frame.BorderSizePixel = 0
+    
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
     
     label.Size = UDim2.new(1, 0, 1, 0)
     label.Text = "Press any key...\n(ESC to cancel)"
-    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.TextColor3 = CurrentTheme.TextColor
     label.BackgroundTransparency = 1
     label.TextSize = 18
     label.Font = Enum.Font.Gotham
@@ -464,6 +512,14 @@ function UmaUiLibrary:ShowKeybindOverlay(callback)
     end)
 end
 
+function UmaUiLibrary:ShowColorPicker(callback)
+
+    warn("Color picker not yet implemented")
+    if callback then
+        callback(Color3.fromRGB(255, 255, 255))
+    end
+end
+
 function UmaUiLibrary:CreateWindow(Settings)
     local Passthrough = false
     Topbar.Title.Text = Settings.Name
@@ -482,59 +538,58 @@ function UmaUiLibrary:CreateWindow(Settings)
     LoadingFrame.Visible = true
 
     pcall(function()
-        if not Settings.ConfigurationSaving.FileName then
-            Settings.ConfigurationSaving.FileName = tostring(game.PlaceId)
-        end
-        CFileName = Settings.ConfigurationSaving.FileName
-        ConfigurationFolder = Settings.ConfigurationSaving.FolderName or ConfigurationFolder
-        CEnabled = Settings.ConfigurationSaving.Enabled
+        if Settings.ConfigurationSaving then
+            if not Settings.ConfigurationSaving.FileName then
+                Settings.ConfigurationSaving.FileName = tostring(game.PlaceId)
+            end
+            CFileName = Settings.ConfigurationSaving.FileName
+            ConfigurationFolder = Settings.ConfigurationSaving.FolderName or ConfigurationFolder
+            CEnabled = Settings.ConfigurationSaving.Enabled
 
-        if Settings.ConfigurationSaving.Enabled then
-            if not isfolder(ConfigurationFolder) then
-                makefolder(ConfigurationFolder)
-            end	
+            if Settings.ConfigurationSaving.Enabled then
+                if not isfolder(ConfigurationFolder) then
+                    makefolder(ConfigurationFolder)
+                end	
+            end
         end
     end)
 
     if Settings.KeySystem then
         if not Settings.KeySettings then
             Passthrough = true
-            return
-        end
+        else
+            if not isfolder(UmaFolder.."/Key System") then
+                makefolder(UmaFolder.."/Key System")
+            end
 
-        if not isfolder(UmaFolder.."/Key System") then
-            makefolder(UmaFolder.."/Key System")
-        end
+            if typeof(Settings.KeySettings.Key) == "string" then 
+                Settings.KeySettings.Key = {Settings.KeySettings.Key} 
+            end
 
-        if typeof(Settings.KeySettings.Key) == "string" then 
-            Settings.KeySettings.Key = {Settings.KeySettings.Key} 
-        end
-
-        if isfile(UmaFolder.."/Key System".."/"..Settings.KeySettings.FileName..ConfigurationExtension) then
-            for _, MKey in ipairs(Settings.KeySettings.Key) do
-                if string.find(readfile(UmaFolder.."/Key System".."/"..Settings.KeySettings.FileName..ConfigurationExtension), MKey) then
-                    Passthrough = true
+            if isfile(UmaFolder.."/Key System".."/"..Settings.KeySettings.FileName..ConfigurationExtension) then
+                for _, MKey in ipairs(Settings.KeySettings.Key) do
+                    if string.find(readfile(UmaFolder.."/Key System".."/"..Settings.KeySettings.FileName..ConfigurationExtension), MKey) then
+                        Passthrough = true
+                    end
                 end
             end
         end
-    end
-
-    if Settings.KeySystem then
-        repeat wait() until Passthrough
+        
+        repeat task.wait() until Passthrough
     end
 
     Notifications.Template.Visible = false
     Notifications.Visible = true
     Uma.Enabled = true
     
-    wait(0.5)
+    task.wait(0.5)
     TweenService:Create(Main, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {BackgroundTransparency = 0}):Play()
     TweenService:Create(Main.Shadow.Image, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {ImageTransparency = 0.55}):Play()
-    wait(0.1)
+    task.wait(0.1)
     TweenService:Create(LoadingFrame.Title, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
-    wait(0.05)
+    task.wait(0.05)
     TweenService:Create(LoadingFrame.Subtitle, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
-    wait(0.05)
+    task.wait(0.05)
     TweenService:Create(LoadingFrame.Version, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
 
     Elements.Template.LayoutOrder = 100000
@@ -545,7 +600,7 @@ function UmaUiLibrary:CreateWindow(Settings)
     local FirstTab = false
     local Window = {}
     
-    function Window:CreateTab(Name, Image)
+    function Window:Tab(Name, Image)
         local TabButton = TabList.Template:Clone()
         TabButton.Name = Name
         TabButton.Title.Text = Name
@@ -564,14 +619,19 @@ function UmaUiLibrary:CreateWindow(Settings)
         end
 
         TabPage.Parent = Elements
+        
+        TabButton.MouseButton1Click:Connect(function()
+            Elements.UIPageLayout:JumpTo(TabPage)
+        end)
+        
         if not FirstTab then
             Elements.UIPageLayout.Animated = false
             Elements.UIPageLayout:JumpTo(TabPage)
             Elements.UIPageLayout.Animated = true
+            FirstTab = true
         end
 
         local Tab = {}
-        local CurrentSection = nil
 
         function Tab:Section(SectionName)
             local SectionSpace = Elements.Template.SectionSpacing:Clone()
@@ -582,11 +642,6 @@ function UmaUiLibrary:CreateWindow(Settings)
             Section.Title.Text = SectionName
             Section.Visible = true
             Section.Parent = TabPage
-
-            CurrentSection = {
-                Name = SectionName,
-                Elements = {}
-            }
 
             local SectionAPI = {}
 
@@ -605,7 +660,6 @@ function UmaUiLibrary:CreateWindow(Settings)
                     Button.Title.Text = Name .. " (ℹ)"
                 end
 
-                table.insert(CurrentSection.Elements, Button)
                 return SectionAPI
             end
 
@@ -662,7 +716,6 @@ function UmaUiLibrary:CreateWindow(Settings)
                     UmaUiLibrary.Flags[Name] = ToggleSettings
                 end
 
-                table.insert(CurrentSection.Elements, Toggle)
                 return SectionAPI
             end
 
@@ -682,14 +735,56 @@ function UmaUiLibrary:CreateWindow(Settings)
                     Type = "Slider"
                 }
 
-                Slider.Main.Progress.Size = UDim2.new(0, Slider.Main.AbsoluteSize.X * (DefaultValue / (Max - Min)), 1, 0)
-                Slider.Main.Information.Text = tostring(DefaultValue) .. (Suffix and " " .. Suffix or "")
+                local dragging = false
+
+                local function updateSlider(value)
+                    value = math.clamp(value, Min, Max)
+                    SliderSettings.CurrentValue = value
+                    
+                    local percent = (value - Min) / (Max - Min)
+                    Slider.Main.Progress.Size = UDim2.new(percent, 0, 1, 0)
+                    Slider.Main.Information.Text = tostring(math.floor(value * 100) / 100) .. (Suffix and " " .. Suffix or "")
+                end
+
+                Slider.Main.Interact.MouseButton1Down:Connect(function()
+                    dragging = true
+                end)
+
+                UserInputService.InputEnded:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        if dragging then
+                            dragging = false
+                            UmaUiLibrary:SaveConfiguration()
+                        end
+                    end
+                end)
+
+                UserInputService.InputChanged:Connect(function(input)
+                    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                        local mousePos = input.Position.X
+                        local sliderPos = Slider.Main.AbsolutePosition.X
+                        local sliderSize = Slider.Main.AbsoluteSize.X
+                        
+                        local percent = math.clamp((mousePos - sliderPos) / sliderSize, 0, 1)
+                        local value = Min + (Max - Min) * percent
+                        
+                        updateSlider(value)
+                        UmaUiLibrary:AsyncCallback(SliderSettings.Callback, value)
+                    end
+                end)
+
+                function SliderSettings:Set(value)
+                    updateSlider(value)
+                    UmaUiLibrary:AsyncCallback(SliderSettings.Callback, value)
+                    UmaUiLibrary:SaveConfiguration()
+                end
+
+                updateSlider(DefaultValue)
 
                 if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
                     UmaUiLibrary.Flags[Name] = SliderSettings
                 end
 
-                table.insert(CurrentSection.Elements, Slider)
                 return SectionAPI
             end
 
@@ -698,7 +793,53 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Label.Title.Text = Text
                 Label.Visible = true
                 Label.Parent = TabPage
-                table.insert(CurrentSection.Elements, Label)
+                
+                local LabelSettings = {
+                    Type = "Label"
+                }
+                
+                function LabelSettings:Set(newText)
+                    Label.Title.Text = newText
+                end
+                
+                return SectionAPI
+            end
+
+            function SectionAPI:Input(Name, DefaultValue, Callback, Placeholder)
+                local Input = Elements.Template.Input:Clone()
+                Input.Name = Name
+                Input.Title.Text = Name
+                Input.Visible = true
+                Input.Parent = TabPage
+
+                local InputSettings = {
+                    Name = Name,
+                    CurrentValue = DefaultValue or "",
+                    Callback = Callback,
+                    Type = "Input"
+                }
+
+                Input.InputFrame.InputBox.Text = DefaultValue or ""
+                Input.InputFrame.InputBox.PlaceholderText = Placeholder or "Enter text..."
+
+                Input.InputFrame.InputBox.FocusLost:Connect(function(enterPressed)
+                    local text = Input.InputFrame.InputBox.Text
+                    InputSettings.CurrentValue = text
+                    UmaUiLibrary:AsyncCallback(InputSettings.Callback, text)
+                    UmaUiLibrary:SaveConfiguration()
+                end)
+
+                function InputSettings:Set(value)
+                    InputSettings.CurrentValue = value
+                    Input.InputFrame.InputBox.Text = value
+                    UmaUiLibrary:AsyncCallback(InputSettings.Callback, value)
+                    UmaUiLibrary:SaveConfiguration()
+                end
+
+                if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
+                    UmaUiLibrary.Flags[Name] = InputSettings
+                end
+
                 return SectionAPI
             end
 
@@ -720,6 +861,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Keybind.KeybindFrame.KeybindBox.Text = DefaultKey
 
                 Keybind.KeybindFrame.KeybindBox.Focused:Connect(function()
+                    Keybind.KeybindFrame.KeybindBox.Text = "..."
                     UmaUiLibrary:ShowKeybindOverlay(function(newKey)
                         KeybindSettings.CurrentKeybind = newKey
                         Keybind.KeybindFrame.KeybindBox.Text = newKey
@@ -727,11 +869,101 @@ function UmaUiLibrary:CreateWindow(Settings)
                     end)
                 end)
 
+                UserInputService.InputBegan:Connect(function(input, gameProcessed)
+                    if not gameProcessed then
+                        local keyName = tostring(input.KeyCode):gsub("Enum.KeyCode.", "")
+                        if keyName == KeybindSettings.CurrentKeybind then
+                            UmaUiLibrary:AsyncCallback(KeybindSettings.Callback)
+                        end
+                    end
+                end)
+
+                function KeybindSettings:Set(key)
+                    KeybindSettings.CurrentKeybind = key
+                    Keybind.KeybindFrame.KeybindBox.Text = key
+                    UmaUiLibrary:SaveConfiguration()
+                end
+
                 if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
                     UmaUiLibrary.Flags[Name] = KeybindSettings
                 end
 
-                table.insert(CurrentSection.Elements, Keybind)
+                return SectionAPI
+            end
+
+            function SectionAPI:Dropdown(Name, Options, DefaultOption, Callback)
+                local Dropdown = Elements.Template.Dropdown:Clone()
+                Dropdown.Name = Name
+                Dropdown.Title.Text = Name
+                Dropdown.Visible = true
+                Dropdown.Parent = TabPage
+
+                local DropdownSettings = {
+                    Name = Name,
+                    Options = Options,
+                    CurrentOption = DefaultOption,
+                    Callback = Callback,
+                    Type = "Dropdown"
+                }
+
+                local isOpen = false
+                Dropdown.DropdownFrame.SelectedOption.Text = DefaultOption or "Select..."
+
+                local function closeDropdown()
+                    isOpen = false
+                    for _, option in ipairs(Dropdown.DropdownFrame.OptionsList:GetChildren()) do
+                        if option:IsA("TextButton") then
+                            option:Destroy()
+                        end
+                    end
+                    Dropdown.DropdownFrame.OptionsList.Visible = false
+                end
+
+                local function openDropdown()
+                    isOpen = true
+                    Dropdown.DropdownFrame.OptionsList.Visible = true
+                    
+                    for _, option in ipairs(Options) do
+                        local optionButton = Instance.new("TextButton")
+                        optionButton.Size = UDim2.new(1, 0, 0, 30)
+                        optionButton.Text = option
+                        optionButton.BackgroundColor3 = CurrentTheme.DropdownUnselected
+                        optionButton.TextColor3 = CurrentTheme.TextColor
+                        optionButton.Font = Enum.Font.Gotham
+                        optionButton.TextSize = 14
+                        optionButton.BorderSizePixel = 0
+                        optionButton.Parent = Dropdown.DropdownFrame.OptionsList
+
+                        optionButton.MouseButton1Click:Connect(function()
+                            DropdownSettings.CurrentOption = option
+                            Dropdown.DropdownFrame.SelectedOption.Text = option
+                            UmaUiLibrary:AsyncCallback(DropdownSettings.Callback, option)
+                            UmaUiLibrary:SaveConfiguration()
+                            closeDropdown()
+                        end)
+                    end
+                end
+
+                Dropdown.DropdownFrame.SelectedOption.MouseButton1Click:Connect(function()
+                    if isOpen then
+                        closeDropdown()
+                    else
+                        openDropdown()
+                    end
+                end)
+
+                function DropdownSettings:Set(option)
+                    DropdownSettings.CurrentOption = option
+                    Dropdown.DropdownFrame.SelectedOption.Text = option
+                    UmaUiLibrary:AsyncCallback(DropdownSettings.Callback, option)
+                    UmaUiLibrary:SaveConfiguration()
+                    closeDropdown()
+                end
+
+                if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
+                    UmaUiLibrary.Flags[Name] = DropdownSettings
+                end
+
                 return SectionAPI
             end
 
@@ -744,6 +976,26 @@ function UmaUiLibrary:CreateWindow(Settings)
 
         function Tab:Toggle(Name, DefaultValue, Callback)
             return self:Section(""):Toggle(Name, DefaultValue, Callback)
+        end
+
+        function Tab:Slider(Name, Min, Max, DefaultValue, Callback, Suffix)
+            return self:Section(""):Slider(Name, Min, Max, DefaultValue, Callback, Suffix)
+        end
+
+        function Tab:Label(Text)
+            return self:Section(""):Label(Text)
+        end
+
+        function Tab:Input(Name, DefaultValue, Callback, Placeholder)
+            return self:Section(""):Input(Name, DefaultValue, Callback, Placeholder)
+        end
+
+        function Tab:Keybind(Name, DefaultKey, Callback, HoldToInteract)
+            return self:Section(""):Keybind(Name, DefaultKey, Callback, HoldToInteract)
+        end
+
+        function Tab:Dropdown(Name, Options, DefaultOption, Callback)
+            return self:Section(""):Dropdown(Name, Options, DefaultOption, Callback)
         end
 
         return Tab
@@ -766,60 +1018,135 @@ function UmaUiLibrary:CreateWindow(Settings)
 
     function Window:Use(PluginName, ...)
         local plugin = UmaUiLibrary.Plugins[PluginName]
-        if plugin then
+        if plugin and plugin.Initialize then
             plugin:Initialize(UmaUiLibrary, ...)
+        else
+            warn("Plugin '" .. tostring(PluginName) .. "' not found or invalid")
         end
         return Window
     end
 
     function Window:On(Event, Callback)
-        local bindableEvent = UmaUiLibrary.Events[Event]
+        local eventName = "On" .. Event
+        local bindableEvent = UmaUiLibrary.Events[eventName]
         if bindableEvent then
             bindableEvent.Event:Connect(Callback)
+        else
+            warn("Event '" .. tostring(Event) .. "' not found")
         end
         return Window
     end
 
-    wait(0.7)
+    function Window:Toggle()
+        Main.Visible = not Main.Visible
+        return Window
+    end
+
+    function Window:Destroy()
+        UmaUiLibrary:Destroy()
+    end
+
+    task.wait(0.7)
     TweenService:Create(LoadingFrame.Title, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
     TweenService:Create(LoadingFrame.Subtitle, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
     TweenService:Create(LoadingFrame.Version, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
-    wait(0.2)
+    task.wait(0.2)
     TweenService:Create(Main, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 500, 0, 475)}):Play()
 
     Topbar.Visible = true
+    Elements.Visible = true
+    TabList.Visible = true
+    LoadingFrame.Visible = false
+    
     TweenService:Create(Topbar, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {BackgroundTransparency = 0}):Play()
     TweenService:Create(Topbar.Title, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
 
+
+    local dragging
+    local dragInput
+    local dragStart
+    local startPos
+
+    local function update(input)
+        local delta = input.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+
+    Topbar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    Topbar.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            update(input)
+        end
+    end)
+
     UmaUiLibrary.Events.OnWindowOpened:Fire(Window)
+
+
+    task.delay(1, function()
+        UmaUiLibrary:LoadConfiguration()
+    end)
 
     return Window
 end
 
 function UmaUiLibrary:Destroy()
     for _, pool in pairs(self.Performance.ObjectPool) do
-        for instance in pairs(pool.Active) do
-            instance:Destroy()
-        end
-        for _, instance in ipairs(pool.Inactive) do
-            instance:Destroy()
+        if pool then
+            for instance in pairs(pool.Active) do
+                pcall(function() instance:Destroy() end)
+            end
+            for _, instance in ipairs(pool.Inactive) do
+                pcall(function() instance:Destroy() end)
+            end
         end
     end
     
-    Uma:Destroy()
+    pcall(function() Uma:Destroy() end)
     self.Events.OnWindowClosed:Fire()
 end
 
 function UmaUiLibrary:GetPerformanceInfo()
     if self.Performance.BenchmarkMode then
+        local activeCount = 0
+        local pooledCount = 0
+        
+        for _, pool in pairs(self.Performance.ObjectPool) do
+            if pool then
+                for _ in pairs(pool.Active) do
+                    activeCount = activeCount + 1
+                end
+                pooledCount = pooledCount + #pool.Inactive
+            end
+        end
+        
         return {
             FPS = self.Performance.FPS or 0,
-            ActiveObjects = 0,
-            PooledObjects = 0
+            ActiveObjects = activeCount,
+            PooledObjects = pooledCount
         }
     end
     return nil
 end
+
 
 UmaUiLibrary:InitializeObjectPool()
 UmaUiLibrary:SetupAccessibility()
@@ -839,9 +1166,5 @@ if UmaUiLibrary.Performance.BenchmarkMode then
         end
     end)
 end
-
-task.delay(3, function()
-    UmaUiLibrary:LoadConfiguration()
-end)
 
 return UmaUiLibrary
