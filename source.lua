@@ -1,5 +1,5 @@
 local UmaUiLibrary = {
-    Version = "2.0.2",
+    Version = "2.1.0",
     Flags = {},
     Events = {
         OnThemeChanged = Instance.new("BindableEvent"),
@@ -17,8 +17,22 @@ local UmaUiLibrary = {
     },
     Internal = {
         EventConnections = {},
-        MutexLocks = {}
-    }
+        MutexLocks = {},
+        ElementData = {}
+    },
+    Configuration = {
+        ErrorTracking = false,
+        ShowErrorNotifications = true,
+        AutoMobileDetect = true,
+        TouchScrollSpeed = 2
+    },
+    Device = {
+        IsMobile = false,
+        IsTablet = false,
+        TouchEnabled = false,
+        ScreenSize = Vector2.new(0, 0)
+    },
+    ThemeChangeDebounce = false
 }
 
 local UserInputService = game:GetService("UserInputService")
@@ -28,7 +42,7 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 
-local Release = "2.0.2"
+local Release = "2.1.0"
 local NotificationDuration = 6.5
 local UmaFolder = "UmaUI"
 local ConfigurationFolder = UmaFolder.."/Configurations"
@@ -158,6 +172,61 @@ local Accessibility = {
     ZoomLevel = 1
 }
 
+function UmaUiLibrary:DetectDevice()
+    local screenSize = Camera.ViewportSize
+    self.Device.ScreenSize = screenSize
+    self.Device.TouchEnabled = UserInputService.TouchEnabled
+    
+    if UserInputService.TouchEnabled then
+        if screenSize.X < 600 or screenSize.Y < 600 then
+            self.Device.IsMobile = true
+            self.Device.IsTablet = false
+        elseif screenSize.X < 1024 or screenSize.Y < 768 then
+            self.Device.IsMobile = false
+            self.Device.IsTablet = true
+        else
+            self.Device.IsMobile = false
+            self.Device.IsTablet = false
+        end
+    else
+        self.Device.IsMobile = false
+        self.Device.IsTablet = false
+    end
+    
+    return self.Device
+end
+
+function UmaUiLibrary:SetupMobileSupport()
+    if not self.Device.TouchEnabled then return end
+    
+    local touchConnection = UserInputService.TouchTap:Connect(function(touchPositions, gameProcessedEvent)
+        if gameProcessedEvent then return end
+    end)
+    
+    local swipeConnection = UserInputService.TouchSwipe:Connect(function(swipeDirection, numberOfTouches, gameProcessedEvent)
+        if gameProcessedEvent then return end
+        
+        if swipeDirection == Enum.SwipeDirection.Left and numberOfTouches == 2 then
+            Main.Visible = false
+        elseif swipeDirection == Enum.SwipeDirection.Right and numberOfTouches == 2 then
+            Main.Visible = true
+        end
+    end)
+    
+    table.insert(self.Internal.EventConnections, touchConnection)
+    table.insert(self.Internal.EventConnections, swipeConnection)
+    
+    if self.Device.IsMobile then
+        if Main then
+            Main.Size = UDim2.new(0, 380, 0, 450)
+        end
+        
+        if Elements.UIPageLayout then
+            Elements.UIPageLayout.ScrollWheelInputEnabled = true
+        end
+    end
+end
+
 function UmaUiLibrary:AcquireLock(lockName)
     while self.Internal.MutexLocks[lockName] do
         task.wait(0.01)
@@ -173,7 +242,8 @@ function UmaUiLibrary:InitializeObjectPool()
     for _, elementType in pairs({"Button", "Toggle", "Slider", "Label", "Dropdown", "Input", "Keybind"}) do
         self.Performance.ObjectPool[elementType] = {
             Active = {},
-            Inactive = {}
+            Inactive = {},
+            ActiveCount = 0
         }
     end
 end
@@ -183,6 +253,7 @@ function UmaUiLibrary:GetFromPool(elementType)
     if pool and #pool.Inactive > 0 then
         local instance = table.remove(pool.Inactive)
         pool.Active[instance] = true
+        pool.ActiveCount = pool.ActiveCount + 1
         return instance
     end
     return nil
@@ -192,6 +263,8 @@ function UmaUiLibrary:ReturnToPool(elementType, instance)
     local pool = self.Performance.ObjectPool[elementType]
     if pool then
         pool.Active[instance] = nil
+        pool.ActiveCount = math.max(0, pool.ActiveCount - 1)
+        
         if #pool.Inactive < self.Performance.MaxPoolSize then
             table.insert(pool.Inactive, instance)
         else
@@ -200,13 +273,54 @@ function UmaUiLibrary:ReturnToPool(elementType, instance)
     end
 end
 
-function UmaUiLibrary:AsyncCallback(callback, ...)
+function UmaUiLibrary:EnhancedAsyncCallback(callback, ...)
     local args = {...}
+    local callbackName = debug.info(callback, "n") or "Anonymous"
+    
     task.spawn(function()
-        local success, result = pcall(callback, table.unpack(args))
-        if not success then
-            warn("UmaUI Async Error:", result)
+        local success, result = xpcall(function()
+            return callback(table.unpack(args))
+        end, function(err)
+            local stack = debug.traceback()
+            warn(string.format("🚨 UmaUI Error in %s:\n%s\n%s", callbackName, err, stack))
+            
+            if self.Configuration.ErrorTracking then
+                self:TrackError(err, stack, callbackName)
+            end
+            
+            return err
+        end)
+        
+        if not success and self.Configuration.ShowErrorNotifications then
+            self:Notify({
+                Title = "Script Error",
+                Content = "An error occurred: " .. tostring(result),
+                Duration = 5
+            })
         end
+    end)
+end
+
+function UmaUiLibrary:AsyncCallback(callback, ...)
+    self:EnhancedAsyncCallback(callback, ...)
+end
+
+function UmaUiLibrary:TrackError(err, stack, location)
+    local errorLog = {
+        Error = err,
+        Stack = stack,
+        Location = location,
+        Timestamp = os.time(),
+        Version = self.Version
+    }
+    
+    if not isfolder(UmaFolder .. "/ErrorLogs") then
+        makefolder(UmaFolder .. "/ErrorLogs")
+    end
+    
+    local filename = string.format("%s/ErrorLogs/error_%d.json", UmaFolder, os.time())
+    pcall(function()
+        writefile(filename, HttpService:JSONEncode(errorLog))
     end)
 end
 
@@ -266,61 +380,104 @@ function UmaUiLibrary:ChangeTheme(themeName)
 end
 
 function UmaUiLibrary:ApplyTheme(theme)
+    if self.ThemeChangeDebounce then return end
+    self.ThemeChangeDebounce = true
+    
     if Main then
         Main.BackgroundColor3 = theme.Background
         Topbar.BackgroundColor3 = theme.Topbar
     end
     
-    task.defer(function()
-        for _, element in pairs(self:GetAllElements()) do
-            self:UpdateElementTheme(element, theme)
+    task.spawn(function()
+        local elements = self:GetAllElements()
+        local chunkSize = 10
+        
+        for i = 1, #elements, chunkSize do
+            task.wait(0.01)
+            local endIdx = math.min(i + chunkSize - 1, #elements)
+            
+            for j = i, endIdx do
+                if elements[j] then
+                    self:UpdateElementTheme(elements[j], theme)
+                end
+            end
         end
+        
+        task.wait(0.1)
+        self.ThemeChangeDebounce = false
     end)
 end
 
 function UmaUiLibrary:UpdateElementTheme(element, theme)
     if not element or not element.Parent then return end
     
+    local elementType = element:GetAttribute("ElementType") or "Unknown"
+    
     pcall(function()
         if element:FindFirstChild("Title") then
             element.Title.TextColor3 = theme.TextColor
             element.Title.Font = theme.TextFont
+            element.Title.TextSize = (Accessibility.LargeFonts and 16 or 14) * Accessibility.ZoomLevel
         end
         
-        if element:IsA("Frame") then
+        if elementType == "Button" then
             element.BackgroundColor3 = theme.ElementBackground
+            if element:FindFirstChild("Interact") then
+                element.Interact.BackgroundColor3 = theme.ElementBackgroundHover
+            end
             
-            if element:FindFirstChild("UIStroke") then
-                element.UIStroke.Color = theme.ElementStroke
+        elseif elementType == "Toggle" then
+            element.BackgroundColor3 = theme.ElementBackground
+            if element:FindFirstChild("Switch") then
+                element.Switch.BackgroundColor3 = theme.ToggleBackground
+                local indicator = element.Switch:FindFirstChild("Indicator")
+                if indicator then
+                    local isEnabled = indicator.Position.X.Offset > -30
+                    indicator.BackgroundColor3 = isEnabled and theme.ToggleEnabled or theme.ToggleDisabled
+                end
+            end
+            
+        elseif elementType == "Slider" then
+            if element:FindFirstChild("Main") then
+                element.Main.BackgroundColor3 = theme.SliderBackground
+                if element.Main:FindFirstChild("Progress") then
+                    element.Main.Progress.BackgroundColor3 = theme.SliderProgress
+                end
+                if element.Main:FindFirstChild("Information") then
+                    element.Main.Information.TextColor3 = theme.TextColor
+                end
+            end
+            
+        elseif elementType == "Input" then
+            if element:FindFirstChild("InputFrame") then
+                element.InputFrame.BackgroundColor3 = theme.InputBackground
+                if element.InputFrame:FindFirstChild("InputBox") then
+                    element.InputFrame.InputBox.TextColor3 = theme.TextColor
+                    element.InputFrame.InputBox.PlaceholderColor3 = theme.PlaceholderColor
+                end
+            end
+            
+        elseif elementType == "Dropdown" then
+            element.BackgroundColor3 = theme.ElementBackground
+            if element:FindFirstChild("DropdownFrame") then
+                element.DropdownFrame.BackgroundColor3 = theme.InputBackground
+                if element.DropdownFrame:FindFirstChild("SelectedOption") then
+                    element.DropdownFrame.SelectedOption.TextColor3 = theme.TextColor
+                    element.DropdownFrame.SelectedOption.BackgroundColor3 = theme.ElementBackground
+                end
+            end
+            
+        elseif elementType == "Keybind" then
+            if element:FindFirstChild("KeybindFrame") then
+                element.KeybindFrame.BackgroundColor3 = theme.InputBackground
+                if element.KeybindFrame:FindFirstChild("KeybindBox") then
+                    element.KeybindFrame.KeybindBox.TextColor3 = theme.TextColor
+                end
             end
         end
         
-        if element:FindFirstChild("Switch") then
-            local indicator = element.Switch:FindFirstChild("Indicator")
-            if indicator then
-                local isEnabled = indicator.Position.X.Offset > -30
-                indicator.BackgroundColor3 = isEnabled and theme.ToggleEnabled or theme.ToggleDisabled
-            end
-        end
-        
-        if element:FindFirstChild("Main") and element.Main:FindFirstChild("Progress") then
-            element.Main.BackgroundColor3 = theme.SliderBackground
-            element.Main.Progress.BackgroundColor3 = theme.SliderProgress
-        end
-        
-        if element:FindFirstChild("InputFrame") then
-            element.InputFrame.BackgroundColor3 = theme.InputBackground
-            if element.InputFrame:FindFirstChild("InputBox") then
-                element.InputFrame.InputBox.TextColor3 = theme.TextColor
-                element.InputFrame.InputBox.PlaceholderColor3 = theme.PlaceholderColor
-            end
-        end
-        
-        if element:FindFirstChild("DropdownFrame") then
-            element.DropdownFrame.BackgroundColor3 = theme.ElementBackground
-            if element.DropdownFrame:FindFirstChild("SelectedOption") then
-                element.DropdownFrame.SelectedOption.TextColor3 = theme.TextColor
-            end
+        if element:FindFirstChild("UIStroke") then
+            element.UIStroke.Color = theme.ElementStroke
         end
     end)
 end
@@ -353,26 +510,77 @@ function UmaUiLibrary:ValidateConfigValue(valueType, value, min, max)
     return value
 end
 
+function UmaUiLibrary:MigrateConfig(oldData, oldVersion)
+    if oldVersion == "2.0.2" then
+        local migrated = {
+            Version = self.Version,
+            Timestamp = os.time(),
+            Flags = {}
+        }
+        
+        for flag, value in pairs(oldData) do
+            if type(value) == "table" and value.Value then
+                migrated.Flags[flag] = value
+            else
+                migrated.Flags[flag] = {
+                    Type = "Unknown",
+                    Value = value,
+                    Timestamp = os.time()
+                }
+            end
+        end
+        
+        return migrated
+    end
+    return oldData
+end
+
 function UmaUiLibrary:SaveConfiguration()
     if not CEnabled then return end
     
     self:AcquireLock("ConfigSave")
     
     local success, err = pcall(function()
-        local data = {}
+        local data = {
+            Version = self.Version,
+            Timestamp = os.time(),
+            Device = {
+                IsMobile = self.Device.IsMobile,
+                IsTablet = self.Device.IsTablet
+            },
+            Flags = {}
+        }
+        
         for flag, element in pairs(self.Flags) do
             if element.Type == "ColorPicker" then
-                data[flag] = {
-                    R = element.Color.R * 255, 
-                    G = element.Color.G * 255, 
-                    B = element.Color.B * 255
+                data.Flags[flag] = {
+                    Type = "ColorPicker",
+                    Value = {
+                        R = element.Color.R * 255,
+                        G = element.Color.G * 255,
+                        B = element.Color.B * 255
+                    },
+                    Timestamp = os.time()
                 }
             elseif element.Type == "Slider" then
-                data[flag] = self:ValidateConfigValue("number", element.CurrentValue, element.Range[1], element.Range[2])
+                data.Flags[flag] = {
+                    Type = "Slider",
+                    Value = self:ValidateConfigValue("number", element.CurrentValue, element.Range[1], element.Range[2]),
+                    Range = element.Range,
+                    Timestamp = os.time()
+                }
             elseif element.Type == "Toggle" then
-                data[flag] = self:ValidateConfigValue("boolean", element.CurrentValue)
-            elseif element.Type == "Input" or element.Type == "Keybind" or element.Type == "Dropdown" then
-                data[flag] = self:ValidateConfigValue("string", element.CurrentValue or element.CurrentKeybind or element.CurrentOption)
+                data.Flags[flag] = {
+                    Type = "Toggle",
+                    Value = self:ValidateConfigValue("boolean", element.CurrentValue),
+                    Timestamp = os.time()
+                }
+            else
+                data.Flags[flag] = {
+                    Type = element.Type,
+                    Value = self:ValidateConfigValue("string", element.CurrentValue or element.CurrentKeybind or element.CurrentOption),
+                    Timestamp = os.time()
+                }
             end
         end
         
@@ -407,25 +615,33 @@ function UmaUiLibrary:LoadConfiguration()
             return nil
         end
         
+        if decoded.Version and decoded.Version ~= self.Version then
+            decoded = self:MigrateConfig(decoded.Flags or decoded, decoded.Version)
+        end
+        
         return decoded
     end)
     
     if success and data then
-        for flagName, flagValue in pairs(data) do
+        local flags = data.Flags or data
+        
+        for flagName, flagData in pairs(flags) do
             if self.Flags[flagName] then
                 local element = self.Flags[flagName]
                 pcall(function()
+                    local value = type(flagData) == "table" and flagData.Value or flagData
+                    
                     if element.Type == "ColorPicker" then
-                        local validated = self:ValidateConfigValue("Color3", flagValue)
+                        local validated = self:ValidateConfigValue("Color3", value)
                         element:Set(Color3.fromRGB(validated.R, validated.G, validated.B))
                     elseif element.Type == "Slider" then
-                        local validated = self:ValidateConfigValue("number", flagValue, element.Range[1], element.Range[2])
+                        local validated = self:ValidateConfigValue("number", value, element.Range[1], element.Range[2])
                         element:Set(validated)
                     elseif element.Type == "Toggle" then
-                        local validated = self:ValidateConfigValue("boolean", flagValue)
+                        local validated = self:ValidateConfigValue("boolean", value)
                         element:Set(validated)
                     else
-                        local validated = self:ValidateConfigValue("string", flagValue)
+                        local validated = self:ValidateConfigValue("string", value)
                         element:Set(validated)
                     end
                 end)
@@ -438,16 +654,27 @@ function UmaUiLibrary:LoadConfiguration()
 end
 
 function UmaUiLibrary:ExportConfiguration()
-    local data = {}
+    local data = {
+        Version = self.Version,
+        Timestamp = os.time(),
+        Flags = {}
+    }
+    
     for flag, element in pairs(self.Flags) do
         if element.Type == "ColorPicker" then
-            data[flag] = {
-                R = element.Color.R * 255, 
-                G = element.Color.G * 255, 
-                B = element.Color.B * 255
+            data.Flags[flag] = {
+                Type = "ColorPicker",
+                Value = {
+                    R = element.Color.R * 255,
+                    G = element.Color.G * 255,
+                    B = element.Color.B * 255
+                }
             }
         else
-            data[flag] = element.CurrentValue or element.CurrentKeybind or element.CurrentOption
+            data.Flags[flag] = {
+                Type = element.Type,
+                Value = element.CurrentValue or element.CurrentKeybind or element.CurrentOption
+            }
         end
     end
     return data
@@ -459,15 +686,19 @@ function UmaUiLibrary:ImportConfiguration(data)
         return
     end
     
-    for flagName, flagValue in pairs(data) do
+    local flags = data.Flags or data
+    
+    for flagName, flagData in pairs(flags) do
         if self.Flags[flagName] then
             local element = self.Flags[flagName]
             pcall(function()
+                local value = type(flagData) == "table" and flagData.Value or flagData
+                
                 if element.Type == "ColorPicker" then
-                    local validated = self:ValidateConfigValue("Color3", flagValue)
+                    local validated = self:ValidateConfigValue("Color3", value)
                     element:Set(Color3.fromRGB(validated.R, validated.G, validated.B))
                 else
-                    element:Set(flagValue)
+                    element:Set(value)
                 end
             end)
         end
@@ -481,14 +712,19 @@ function UmaUiLibrary:ShowColorPicker(callback)
     local hueSlider = Instance.new("Frame")
     local satBright = Instance.new("Frame")
     local preview = Instance.new("Frame")
+    local rgbInput = Instance.new("TextBox")
+    local hexInput = Instance.new("TextBox")
     local confirm = Instance.new("TextButton")
     local cancel = Instance.new("TextButton")
     
     colorPicker.Name = "ColorPicker"
     colorPicker.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     
-    frame.Size = UDim2.new(0, 300, 0, 400)
-    frame.Position = UDim2.new(0.5, -150, 0.5, -200)
+    local frameWidth = self.Device.IsMobile and 280 or 320
+    local frameHeight = self.Device.IsMobile and 420 or 460
+    
+    frame.Size = UDim2.new(0, frameWidth, 0, frameHeight)
+    frame.Position = UDim2.new(0.5, -frameWidth/2, 0.5, -frameHeight/2)
     frame.BackgroundColor3 = CurrentTheme.Background
     frame.BorderSizePixel = 0
     
@@ -504,14 +740,29 @@ function UmaUiLibrary:ShowColorPicker(callback)
     title.Font = Enum.Font.GothamBold
     title.Parent = frame
     
-    satBright.Size = UDim2.new(0.9, 0, 0, 200)
+    satBright.Size = UDim2.new(0.9, 0, 0, 180)
     satBright.Position = UDim2.new(0.05, 0, 0, 50)
     satBright.BackgroundColor3 = Color3.fromHSV(0, 1, 1)
     satBright.BorderSizePixel = 0
     satBright.Parent = frame
     
+    local satGradient = Instance.new("UIGradient")
+    satGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
+    })
+    satGradient.Parent = satBright
+    
+    local brightGradient = Instance.new("UIGradient")
+    brightGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255))
+    })
+    brightGradient.Rotation = 90
+    brightGradient.Parent = satBright
+    
     hueSlider.Size = UDim2.new(0.9, 0, 0, 20)
-    hueSlider.Position = UDim2.new(0.05, 0, 0, 260)
+    hueSlider.Position = UDim2.new(0.05, 0, 0, 240)
     hueSlider.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     hueSlider.BorderSizePixel = 0
     hueSlider.Parent = frame
@@ -529,7 +780,7 @@ function UmaUiLibrary:ShowColorPicker(callback)
     hueGradient.Parent = hueSlider
     
     preview.Size = UDim2.new(0, 60, 0, 60)
-    preview.Position = UDim2.new(0.5, -30, 0, 290)
+    preview.Position = UDim2.new(0.5, -30, 0, 270)
     preview.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     preview.BorderSizePixel = 0
     preview.Parent = frame
@@ -538,8 +789,28 @@ function UmaUiLibrary:ShowColorPicker(callback)
     previewCorner.CornerRadius = UDim.new(0, 8)
     previewCorner.Parent = preview
     
+    rgbInput.Size = UDim2.new(0.8, 0, 0, 25)
+    rgbInput.Position = UDim2.new(0.1, 0, 0, 340)
+    rgbInput.PlaceholderText = "RGB: 255,255,255"
+    rgbInput.Text = ""
+    rgbInput.TextColor3 = CurrentTheme.TextColor
+    rgbInput.BackgroundColor3 = CurrentTheme.InputBackground
+    rgbInput.Font = Enum.Font.Gotham
+    rgbInput.TextSize = 12
+    rgbInput.Parent = frame
+    
+    hexInput.Size = UDim2.new(0.8, 0, 0, 25)
+    hexInput.Position = UDim2.new(0.1, 0, 0, 370)
+    hexInput.PlaceholderText = "Hex: #FFFFFF"
+    hexInput.Text = ""
+    hexInput.TextColor3 = CurrentTheme.TextColor
+    hexInput.BackgroundColor3 = CurrentTheme.InputBackground
+    hexInput.Font = Enum.Font.Gotham
+    hexInput.TextSize = 12
+    hexInput.Parent = frame
+    
     confirm.Size = UDim2.new(0, 120, 0, 35)
-    confirm.Position = UDim2.new(0.05, 0, 0, 360)
+    confirm.Position = UDim2.new(0.05, 0, 0, frameHeight - 45)
     confirm.BackgroundColor3 = CurrentTheme.ToggleEnabled
     confirm.Text = "Confirm"
     confirm.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -548,7 +819,7 @@ function UmaUiLibrary:ShowColorPicker(callback)
     confirm.Parent = frame
     
     cancel.Size = UDim2.new(0, 120, 0, 35)
-    cancel.Position = UDim2.new(0.55, 0, 0, 360)
+    cancel.Position = UDim2.new(0.55, 0, 0, frameHeight - 45)
     cancel.BackgroundColor3 = CurrentTheme.ElementStroke
     cancel.Text = "Cancel"
     cancel.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -562,21 +833,127 @@ function UmaUiLibrary:ShowColorPicker(callback)
     local currentHue = 0
     local currentSat = 1
     local currentVal = 1
+    local currentColor = Color3.fromRGB(255, 255, 255)
     
     local function updatePreview()
-        preview.BackgroundColor3 = Color3.fromHSV(currentHue, currentSat, currentVal)
+        currentColor = Color3.fromHSV(currentHue, currentSat, currentVal)
+        preview.BackgroundColor3 = currentColor
         satBright.BackgroundColor3 = Color3.fromHSV(currentHue, 1, 1)
+        
+        local r = math.floor(currentColor.R * 255)
+        local g = math.floor(currentColor.G * 255)
+        local b = math.floor(currentColor.B * 255)
+        rgbInput.Text = string.format("RGB: %d,%d,%d", r, g, b)
+        hexInput.Text = string.format("#%02X%02X%02X", r, g, b)
     end
     
+    local hueConnection
+    hueConnection = hueSlider.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            local moveConnection
+            moveConnection = UserInputService.InputChanged:Connect(function(input2)
+                if input2.UserInputType == Enum.UserInputType.MouseMovement or input2.UserInputType == Enum.UserInputType.Touch then
+                    local mouseX = input2.Position.X
+                    local sliderPos = hueSlider.AbsolutePosition.X
+                    local sliderSize = hueSlider.AbsoluteSize.X
+                    local percent = math.clamp((mouseX - sliderPos) / sliderSize, 0, 1)
+                    currentHue = percent
+                    updatePreview()
+                end
+            end)
+            
+            local releaseConnection
+            releaseConnection = UserInputService.InputEnded:Connect(function(input3)
+                if input3.UserInputType == Enum.UserInputType.MouseButton1 or input3.UserInputType == Enum.UserInputType.Touch then
+                    moveConnection:Disconnect()
+                    releaseConnection:Disconnect()
+                end
+            end)
+        end
+    end)
+    
+    local satBrightConnection
+    satBrightConnection = satBright.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            local moveConnection
+            moveConnection = UserInputService.InputChanged:Connect(function(input2)
+                if input2.UserInputType == Enum.UserInputType.MouseMovement or input2.UserInputType == Enum.UserInputType.Touch then
+                    local mousePos = input2.Position
+                    local areaPos = satBright.AbsolutePosition
+                    local areaSize = satBright.AbsoluteSize
+                    
+                    local sat = math.clamp((mousePos.X - areaPos.X) / areaSize.X, 0, 1)
+                    local bright = 1 - math.clamp((mousePos.Y - areaPos.Y) / areaSize.Y, 0, 1)
+                    
+                    currentSat = sat
+                    currentVal = bright
+                    updatePreview()
+                end
+            end)
+            
+            local releaseConnection
+            releaseConnection = UserInputService.InputEnded:Connect(function(input3)
+                if input3.UserInputType == Enum.UserInputType.MouseButton1 or input3.UserInputType == Enum.UserInputType.Touch then
+                    moveConnection:Disconnect()
+                    releaseConnection:Disconnect()
+                end
+            end)
+        end
+    end)
+    
+    rgbInput.FocusLost:Connect(function()
+        local success = pcall(function()
+            local r, g, b = rgbInput.Text:match("(%d+)[,%s]+(%d+)[,%s]+(%d+)")
+            if r and g and b then
+                r, g, b = tonumber(r), tonumber(g), tonumber(b)
+                if r and g and b then
+                    r = math.clamp(r, 0, 255)
+                    g = math.clamp(g, 0, 255)
+                    b = math.clamp(b, 0, 255)
+                    currentColor = Color3.fromRGB(r, g, b)
+                    local h, s, v = currentColor:ToHSV()
+                    currentHue, currentSat, currentVal = h, s, v
+                    updatePreview()
+                end
+            end
+        end)
+        if not success then
+            updatePreview()
+        end
+    end)
+    
+    hexInput.FocusLost:Connect(function()
+        local success = pcall(function()
+            local hex = hexInput.Text:gsub("#", "")
+            if #hex == 6 then
+                local r = tonumber(hex:sub(1,2), 16)
+                local g = tonumber(hex:sub(3,4), 16)
+                local b = tonumber(hex:sub(5,6), 16)
+                if r and g and b then
+                    currentColor = Color3.fromRGB(r, g, b)
+                    local h, s, v = currentColor:ToHSV()
+                    currentHue, currentSat, currentVal = h, s, v
+                    updatePreview()
+                end
+            end
+        end)
+        if not success then
+            updatePreview()
+        end
+    end)
+    
     confirm.MouseButton1Click:Connect(function()
-        local finalColor = Color3.fromHSV(currentHue, currentSat, currentVal)
+        hueConnection:Disconnect()
+        satBrightConnection:Disconnect()
         colorPicker:Destroy()
         if callback then
-            callback(finalColor)
+            callback(currentColor)
         end
     end)
     
     cancel.MouseButton1Click:Connect(function()
+        hueConnection:Disconnect()
+        satBrightConnection:Disconnect()
         colorPicker:Destroy()
     end)
     
@@ -689,8 +1066,11 @@ function UmaUiLibrary:ShowKeybindOverlay(callback)
     overlay.Name = "KeybindOverlay"
     overlay.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     
-    frame.Size = UDim2.new(0, 300, 0, 150)
-    frame.Position = UDim2.new(0.5, -150, 0.5, -75)
+    local frameWidth = self.Device.IsMobile and 250 or 300
+    local frameHeight = self.Device.IsMobile and 120 or 150
+    
+    frame.Size = UDim2.new(0, frameWidth, 0, frameHeight)
+    frame.Position = UDim2.new(0.5, -frameWidth/2, 0.5, -frameHeight/2)
     frame.BackgroundColor3 = CurrentTheme.Background
     frame.BorderSizePixel = 0
     
@@ -701,13 +1081,27 @@ function UmaUiLibrary:ShowKeybindOverlay(callback)
     label.Text = "Press any key...\n(ESC to cancel)"
     label.TextColor3 = CurrentTheme.TextColor
     label.BackgroundTransparency = 1
-    label.TextSize = 18
+    label.TextSize = self.Device.IsMobile and 14 or 18
     label.Font = Enum.Font.Gotham
     label.TextWrapped = true
     
     frame.Parent = overlay
     label.Parent = frame
     overlay.Parent = CoreGui
+    
+    local function checkModifiers()
+        local modifiers = {}
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
+            table.insert(modifiers, "Ctrl")
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then
+            table.insert(modifiers, "Shift")
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt) then
+            table.insert(modifiers, "Alt")
+        end
+        return modifiers
+    end
     
     local connection
     connection = UserInputService.InputBegan:Connect(function(input)
@@ -718,10 +1112,21 @@ function UmaUiLibrary:ShowKeybindOverlay(callback)
         end
         
         if input.KeyCode ~= Enum.KeyCode.Unknown then
+            local modifiers = checkModifiers()
             local keyName = tostring(input.KeyCode):gsub("Enum.KeyCode.", "")
+            
+            if keyName:find("Left") or keyName:find("Right") then
+                keyName = keyName:gsub("Left", "L-"):gsub("Right", "R-")
+            end
+            
+            local fullKey = keyName
+            if #modifiers > 0 then
+                fullKey = table.concat(modifiers, "+") .. "+" .. keyName
+            end
+            
             overlay:Destroy()
             connection:Disconnect()
-            self:AsyncCallback(callback, keyName)
+            self:AsyncCallback(callback, fullKey)
         end
     end)
     
@@ -729,8 +1134,14 @@ function UmaUiLibrary:ShowKeybindOverlay(callback)
 end
 
 function UmaUiLibrary:CreateWindow(Settings)
+    self:DetectDevice()
+    
     local Passthrough = false
     Topbar.Title.Text = Settings.Name
+    
+    local windowWidth = self.Device.IsMobile and 380 or 500
+    local windowHeight = self.Device.IsMobile and 450 or 475
+    
     Main.Size = UDim2.new(0, 450, 0, 260)
     Main.Visible = true
     Main.BackgroundTransparency = 1
@@ -813,8 +1224,8 @@ function UmaUiLibrary:CreateWindow(Settings)
     local Window = {}
     local OpenDropdowns = {}
     
-    UserInputService.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    local dropdownCloseConnection = UserInputService.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             for _, dropdown in ipairs(OpenDropdowns) do
                 if dropdown and dropdown.closeFunction then
                     dropdown.closeFunction()
@@ -823,6 +1234,8 @@ function UmaUiLibrary:CreateWindow(Settings)
             OpenDropdowns = {}
         end
     end)
+    
+    table.insert(self.Internal.EventConnections, dropdownCloseConnection)
     
     function Window:Tab(Name, Image)
         local TabButton = TabList.Template:Clone()
@@ -875,6 +1288,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Button.Title.Text = Name
                 Button.Visible = true
                 Button.Parent = TabPage
+                Button:SetAttribute("ElementType", "Button")
 
                 Button.Interact.MouseButton1Click:Connect(function()
                     UmaUiLibrary:AsyncCallback(Callback)
@@ -893,6 +1307,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Toggle.Title.Text = Name
                 Toggle.Visible = true
                 Toggle.Parent = TabPage
+                Toggle:SetAttribute("ElementType", "Toggle")
 
                 local ToggleSettings = {
                     Name = Name,
@@ -944,11 +1359,16 @@ function UmaUiLibrary:CreateWindow(Settings)
             end
 
             function SectionAPI:Slider(Name, Min, Max, DefaultValue, Callback, Suffix)
+                if Min > Max then
+                    Min, Max = Max, Min
+                end
+                
                 local Slider = Elements.Template.Slider:Clone()
                 Slider.Name = Name
                 Slider.Title.Text = Name
                 Slider.Visible = true
                 Slider.Parent = TabPage
+                Slider:SetAttribute("ElementType", "Slider")
 
                 local SliderSettings = {
                     Name = Name,
@@ -961,19 +1381,34 @@ function UmaUiLibrary:CreateWindow(Settings)
 
                 local dragging = false
                 local precision = 0.01
+                
+                if (Max - Min) < 1 then
+                    precision = 0.001
+                elseif (Max - Min) < 10 then
+                    precision = 0.01
+                else
+                    precision = 0.1
+                end
 
                 local function updateSlider(value)
                     value = math.clamp(value, Min, Max)
+                    
+                    local decimalPlaces = math.max(0, -math.floor(math.log10(precision)))
                     value = math.floor(value / precision + 0.5) * precision
+                    value = tonumber(string.format("%." .. decimalPlaces .. "f", value))
+                    
+                    if value < Min then value = Min end
+                    if value > Max then value = Max end
+                    
                     SliderSettings.CurrentValue = value
                     
                     local percent = (value - Min) / (Max - Min)
                     Slider.Main.Progress.Size = UDim2.new(percent, 0, 1, 0)
                     
                     local displayValue
-                    if value >= 100 then
+                    if math.abs(value) >= 100 then
                         displayValue = string.format("%.0f", value)
-                    elseif value >= 10 then
+                    elseif math.abs(value) >= 10 then
                         displayValue = string.format("%.1f", value)
                     else
                         displayValue = string.format("%.2f", value)
@@ -982,12 +1417,14 @@ function UmaUiLibrary:CreateWindow(Settings)
                     Slider.Main.Information.Text = displayValue .. (Suffix and " " .. Suffix or "")
                 end
 
-                Slider.Main.Interact.MouseButton1Down:Connect(function()
-                    dragging = true
+                local interactConnection = Slider.Main.Interact.InputBegan:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                        dragging = true
+                    end
                 end)
 
                 local releaseConnection = UserInputService.InputEnded:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                         if dragging then
                             dragging = false
                             UmaUiLibrary:SaveConfiguration()
@@ -996,7 +1433,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 end)
 
                 local moveConnection = UserInputService.InputChanged:Connect(function(input)
-                    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                         local mousePos = input.Position.X
                         local sliderPos = Slider.Main.AbsolutePosition.X
                         local sliderSize = Slider.Main.AbsoluteSize.X
@@ -1021,6 +1458,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                     UmaUiLibrary.Flags[Name] = SliderSettings
                 end
 
+                table.insert(UmaUiLibrary.Internal.EventConnections, interactConnection)
                 table.insert(UmaUiLibrary.Internal.EventConnections, releaseConnection)
                 table.insert(UmaUiLibrary.Internal.EventConnections, moveConnection)
 
@@ -1032,6 +1470,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Label.Title.Text = Text
                 Label.Visible = true
                 Label.Parent = TabPage
+                Label:SetAttribute("ElementType", "Label")
                 
                 local LabelSettings = {
                     Type = "Label"
@@ -1050,6 +1489,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Input.Title.Text = Name
                 Input.Visible = true
                 Input.Parent = TabPage
+                Input:SetAttribute("ElementType", "Input")
 
                 local InputSettings = {
                     Name = Name,
@@ -1088,6 +1528,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Keybind.Title.Text = Name
                 Keybind.Visible = true
                 Keybind.Parent = TabPage
+                Keybind:SetAttribute("ElementType", "Keybind")
 
                 local KeybindSettings = {
                     Name = Name,
@@ -1109,9 +1550,14 @@ function UmaUiLibrary:CreateWindow(Settings)
                 end)
 
                 local keybindConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-                    if not gameProcessed then
+                    if not gameProcessed and input.KeyCode ~= Enum.KeyCode.Unknown then
                         local keyName = tostring(input.KeyCode):gsub("Enum.KeyCode.", "")
-                        if keyName == KeybindSettings.CurrentKeybind then
+                        
+                        if keyName:find("Left") or keyName:find("Right") then
+                            keyName = keyName:gsub("Left", "L-"):gsub("Right", "R-")
+                        end
+                        
+                        if keyName == KeybindSettings.CurrentKeybind or KeybindSettings.CurrentKeybind:find(keyName) then
                             UmaUiLibrary:AsyncCallback(KeybindSettings.Callback)
                         end
                     end
@@ -1138,6 +1584,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                 Dropdown.Title.Text = Name
                 Dropdown.Visible = true
                 Dropdown.Parent = TabPage
+                Dropdown:SetAttribute("ElementType", "Dropdown")
 
                 local DropdownSettings = {
                     Name = Name,
@@ -1147,6 +1594,11 @@ function UmaUiLibrary:CreateWindow(Settings)
                     Type = "Dropdown"
                 }
 
+                local dropdownData = {
+                    Connections = {},
+                    Element = Dropdown
+                }
+                
                 local isOpen = false
                 Dropdown.DropdownFrame.SelectedOption.Text = DefaultOption or "Select..."
 
@@ -1185,7 +1637,7 @@ function UmaUiLibrary:CreateWindow(Settings)
                         optionButton.BackgroundColor3 = CurrentTheme.DropdownUnselected
                         optionButton.TextColor3 = CurrentTheme.TextColor
                         optionButton.Font = Enum.Font.Gotham
-                        optionButton.TextSize = 14
+                        optionButton.TextSize = UmaUiLibrary.Device.IsMobile and 12 or 14
                         optionButton.BorderSizePixel = 0
                         optionButton.Parent = Dropdown.DropdownFrame.OptionsList
 
@@ -1211,6 +1663,8 @@ function UmaUiLibrary:CreateWindow(Settings)
                         openDropdown()
                     end
                 end)
+                
+                table.insert(dropdownData.Connections, dropdownConnection)
 
                 function DropdownSettings:Set(option)
                     DropdownSettings.CurrentOption = option
@@ -1219,12 +1673,25 @@ function UmaUiLibrary:CreateWindow(Settings)
                     UmaUiLibrary:SaveConfiguration()
                     closeDropdown()
                 end
+                
+                local ancestryConnection = Dropdown.AncestryChanged:Connect(function()
+                    if not Dropdown.Parent then
+                        for _, conn in ipairs(dropdownData.Connections) do
+                            pcall(function() conn:Disconnect() end)
+                        end
+                        closeDropdown()
+                    end
+                end)
+                
+                table.insert(dropdownData.Connections, ancestryConnection)
 
                 if Settings.ConfigurationSaving and Settings.ConfigurationSaving.Enabled and Name then
                     UmaUiLibrary.Flags[Name] = DropdownSettings
                 end
 
-                table.insert(UmaUiLibrary.Internal.EventConnections, dropdownConnection)
+                for _, conn in ipairs(dropdownData.Connections) do
+                    table.insert(UmaUiLibrary.Internal.EventConnections, conn)
+                end
 
                 return SectionAPI
             end
@@ -1314,7 +1781,7 @@ function UmaUiLibrary:CreateWindow(Settings)
     TweenService:Create(LoadingFrame.Subtitle, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
     TweenService:Create(LoadingFrame.Version, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
     task.wait(0.2)
-    TweenService:Create(Main, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 500, 0, 475)}):Play()
+    TweenService:Create(Main, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {Size = UDim2.new(0, windowWidth, 0, windowHeight)}):Play()
 
     Topbar.Visible = true
     Elements.Visible = true
@@ -1335,7 +1802,7 @@ function UmaUiLibrary:CreateWindow(Settings)
     end
 
     Topbar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
             startPos = Main.Position
@@ -1349,7 +1816,7 @@ function UmaUiLibrary:CreateWindow(Settings)
     end)
 
     Topbar.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
     end)
@@ -1360,6 +1827,8 @@ function UmaUiLibrary:CreateWindow(Settings)
         end
     end)
 
+    self:SetupMobileSupport()
+    
     UmaUiLibrary.Events.OnWindowOpened:Fire(Window)
 
     task.delay(1, function()
@@ -1399,9 +1868,7 @@ function UmaUiLibrary:GetPerformanceInfo()
         
         for _, pool in pairs(self.Performance.ObjectPool) do
             if pool then
-                for _ in pairs(pool.Active) do
-                    activeCount = activeCount + 1
-                end
+                activeCount = activeCount + (pool.ActiveCount or 0)
                 pooledCount = pooledCount + #pool.Inactive
             end
         end
@@ -1409,7 +1876,8 @@ function UmaUiLibrary:GetPerformanceInfo()
         return {
             FPS = self.Performance.FPS or 0,
             ActiveObjects = activeCount,
-            PooledObjects = pooledCount
+            PooledObjects = pooledCount,
+            Device = self.Device
         }
     end
     return nil
