@@ -2,7 +2,7 @@ local UmaPlugins = {}
 
 UmaPlugins.ColorPicker = {
     Name = "ColorPicker",
-    Version = "1.0.1",
+    Version = "1.1.0",
     
     Initialize = function(core, parentTab)
         if not core or not parentTab then
@@ -89,7 +89,7 @@ UmaPlugins.ColorPicker = {
 
 UmaPlugins.PresetManager = {
     Name = "PresetManager",
-    Version = "1.0.1",
+    Version = "1.1.0",
     
     Initialize = function(core, parentTab)
         if not core or not parentTab then
@@ -128,19 +128,20 @@ UmaPlugins.PresetManager = {
                         Name = presetName,
                         Config = config,
                         Timestamp = os.time(),
-                        Date = os.date("%Y-%m-%d %H:%M:%S")
+                        Date = os.date("%Y-%m-%d %H:%M:%S"),
+                        Device = core.Device
                     }
                     print("Preset saved:", presetName)
                     
                     if core.Notify then
                         core:Notify({
                             Title = "Preset Manager",
-                            Content = "Preset '" .. presetName .. "' saved successfully",
+                            Content = "Preset '" .. presetName .. "' saved",
                             Duration = 3
                         })
                     end
                 else
-                    warn("ExportConfiguration not found in core")
+                    warn("ExportConfiguration not found")
                 end
                 
                 task.wait(0.5)
@@ -148,7 +149,7 @@ UmaPlugins.PresetManager = {
             end)
         end)
         
-        presetSection:Button("Load Latest Preset", function()
+        presetSection:Button("Load Latest", function()
             local latestPreset = nil
             local latestTime = 0
             
@@ -168,26 +169,24 @@ UmaPlugins.PresetManager = {
                     if core.Notify then
                         core:Notify({
                             Title = "Preset Manager",
-                            Content = "Preset '" .. latestPreset.Name .. "' loaded",
+                            Content = "Loaded: " .. latestPreset.Name,
                             Duration = 3
                         })
                     end
-                else
-                    warn("ImportConfiguration not found in core")
                 end
             else
                 print("No presets available")
                 if core.Notify then
                     core:Notify({
                         Title = "Preset Manager",
-                        Content = "No presets available to load",
+                        Content = "No presets available",
                         Duration = 3
                     })
                 end
             end
         end)
         
-        presetSection:Button("Delete All Presets", function()
+        presetSection:Button("Delete All", function()
             local count = 0
             for _ in pairs(presets) do
                 count = count + 1
@@ -206,12 +205,14 @@ UmaPlugins.PresetManager = {
             end
         end)
         
-        presetSection:Button("List All Presets", function()
+        presetSection:Button("List Presets", function()
             print("=== Available Presets ===")
             local count = 0
             for name, preset in pairs(presets) do
                 count = count + 1
-                print(string.format("%d. %s (Saved: %s)", count, preset.Name, preset.Date))
+                local deviceInfo = preset.Device and 
+                    (preset.Device.IsMobile and "📱" or preset.Device.IsTablet and "📋" or "💻") or "?"
+                print(string.format("%d. %s %s (Saved: %s)", count, deviceInfo, preset.Name, preset.Date))
             end
             if count == 0 then
                 print("No presets available")
@@ -219,7 +220,9 @@ UmaPlugins.PresetManager = {
             print("========================")
         end)
         
-        presetSection:Toggle("Auto-Save", false, function(enabled)
+        presetSection:Section("Auto-Save")
+        
+        presetSection:Toggle("Enable Auto-Save", false, function(enabled)
             autoSaveEnabled = enabled
             if enabled then
                 print("Auto-save enabled (every", autoSaveInterval, "seconds)")
@@ -227,6 +230,10 @@ UmaPlugins.PresetManager = {
                 print("Auto-save disabled")
             end
         end)
+        
+        presetSection:Slider("Interval", 10, 300, autoSaveInterval, function(value)
+            autoSaveInterval = math.floor(value)
+        end, "s")
         
         task.spawn(function()
             local RunService = game:GetService("RunService")
@@ -250,9 +257,10 @@ UmaPlugins.PresetManager = {
                                     Config = config,
                                     Timestamp = os.time(),
                                     Date = os.date("%Y-%m-%d %H:%M:%S"),
-                                    AutoSave = true
+                                    AutoSave = true,
+                                    Device = core.Device
                                 }
-                                print("Auto-saved preset:", presetName)
+                                print("Auto-saved:", presetName)
                             end
                             
                             lastAutoSave = currentTime
@@ -283,7 +291,8 @@ UmaPlugins.PresetManager = {
                         Name = name,
                         Config = core:ExportConfiguration(),
                         Timestamp = os.time(),
-                        Date = os.date("%Y-%m-%d %H:%M:%S")
+                        Date = os.date("%Y-%m-%d %H:%M:%S"),
+                        Device = core.Device
                     }
                     return true
                 end
@@ -371,7 +380,7 @@ UmaPlugins.ThemeSwitcher = {
             return nil
         end
         
-        local themeSection = parentTab:Section("Theme Settings")
+        local themeSection = parentTab:Section("Theme Switcher")
         
         themeSection:Button("Dark Theme", function()
             if core.ChangeTheme then
@@ -397,7 +406,7 @@ UmaPlugins.ThemeSwitcher = {
 
 UmaPlugins.ConfigIO = {
     Name = "ConfigIO",
-    Version = "1.0.1",
+    Version = "1.1.0",
     
     Initialize = function(core, parentTab)
         if not core or not parentTab then
@@ -424,7 +433,7 @@ UmaPlugins.ConfigIO = {
                         if core.Notify then
                             core:Notify({
                                 Title = "Config Export",
-                                Content = "Configuration copied to clipboard",
+                                Content = "Copied to clipboard",
                                 Duration = 3
                             })
                         end
@@ -468,22 +477,108 @@ UmaPlugins.ConfigIO = {
                     if core.Notify then
                         core:Notify({
                             Title = "Config Import",
-                            Content = "Configuration imported successfully",
+                            Content = "Configuration imported",
                             Duration = 3
                         })
                     end
                 else
-                    warn("Failed to import configuration:", config)
+                    warn("Failed to import:", config)
                     if core.Notify then
                         core:Notify({
                             Title = "Config Import",
-                            Content = "Failed to import - Invalid or malicious data",
+                            Content = "Failed - Invalid data",
                             Duration = 3
                         })
                     end
                 end
             else
-                warn("Clipboard or ImportConfiguration not supported")
+                warn("Clipboard not supported")
+            end
+        end)
+        
+        configSection:Button("Save to File", function()
+            if core.SaveConfiguration then
+                core:SaveConfiguration()
+                if core.Notify then
+                    core:Notify({
+                        Title = "Config",
+                        Content = "Configuration saved to file",
+                        Duration = 3
+                    })
+                end
+            end
+        end)
+        
+        configSection:Button("Load from File", function()
+            if core.LoadConfiguration then
+                core:LoadConfiguration()
+                if core.Notify then
+                    core:Notify({
+                        Title = "Config",
+                        Content = "Configuration loaded",
+                        Duration = 3
+                    })
+                end
+            end
+        end)
+        
+        return {}
+    end
+}
+
+UmaPlugins.DeviceInfo = {
+    Name = "DeviceInfo",
+    Version = "1.0.0",
+    
+    Initialize = function(core, parentTab)
+        if not core or not parentTab then
+            warn("DeviceInfo: Invalid parameters")
+            return nil
+        end
+        
+        local deviceSection = parentTab:Section("Device Information")
+        
+        local device = core.Device or {}
+        
+        local deviceType = device.IsMobile and "📱 Mobile" or 
+                          device.IsTablet and "📋 Tablet" or 
+                          "💻 Desktop"
+        
+        deviceSection:Label("Device: " .. deviceType)
+        
+        if device.ScreenSize then
+            deviceSection:Label(string.format("Screen: %dx%d", 
+                math.floor(device.ScreenSize.X), 
+                math.floor(device.ScreenSize.Y)))
+        end
+        
+        deviceSection:Label("Touch: " .. (device.TouchEnabled and "✓ Yes" or "✗ No"))
+        
+        deviceSection:Button("Refresh Info", function()
+            if core.DetectDevice then
+                core:DetectDevice()
+                print("Device info refreshed")
+            end
+        end)
+        
+        deviceSection:Section("Performance")
+        
+        local memLabel = deviceSection:Label("Memory: Calculating...")
+        local fpsLabel = deviceSection:Label("FPS: Calculating...")
+        
+        task.spawn(function()
+            while task.wait(2) do
+                local mem = math.floor(collectgarbage("count") / 1024 * 100) / 100
+                local fps = 60
+                
+                if core.Performance and core.Performance.FPS then
+                    fps = core.Performance.FPS
+                end
+                
+                pcall(function()
+                    memLabel:Set(string.format("Memory: %.2f MB", mem))
+                    fpsLabel:Set(string.format("FPS: %d", fps))
+                end)
             end
         end)
         
