@@ -1,4 +1,4 @@
-# Uma UI Library v2.1.0 - Complete Overhaul
+# Uma UI Library v2.1.0 
 
 ## 🚀 Major Release - Mobile/PC Support & Performance Revolution
 
