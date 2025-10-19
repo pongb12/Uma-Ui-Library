@@ -1,17 +1,27 @@
 local PerformanceMonitor = {
+    Version = "3.0.0",
     Metrics = {
         RenderTime = 0,
         MemoryUsage = 0,
         ElementCount = 0,
         FPS = 0,
-        LastUpdate = 0
+        LastUpdate = 0,
+        PeakMemory = 0,
+        AverageRenderTime = 0
     },
     UpdateInterval = 0.5,
     Initialized = false,
-    Connections = {},
+    Connections = setmetatable({}, {__mode = "v"}),
     MemoryHistory = {},
     FPSHistory = {},
-    MaxHistorySize = 60
+    RenderHistory = {},
+    MaxHistorySize = 120,
+    AlertThresholds = {
+        CriticalMemory = 400,
+        WarningMemory = 250,
+        CriticalFPS = 20,
+        WarningFPS = 40
+    }
 }
 
 function PerformanceMonitor:Initialize(core)
@@ -40,11 +50,17 @@ function PerformanceMonitor:StartMonitoring()
     
     local frameCount = 0
     local lastTime = tick()
+    local renderTimes = {}
     local RunService = game:GetService("RunService")
     
     local connection = RunService.Heartbeat:Connect(function(deltaTime)
         frameCount = frameCount + 1
         local currentTime = tick()
+        
+        table.insert(renderTimes, deltaTime * 1000)
+        if #renderTimes > 60 then
+            table.remove(renderTimes, 1)
+        end
         
         if currentTime - lastTime >= 1 then
             self.Metrics.FPS = frameCount
@@ -52,6 +68,7 @@ function PerformanceMonitor:StartMonitoring()
             lastTime = currentTime
             
             self:UpdateHistory()
+            self:CheckThresholds()
         end
         
         if currentTime - self.Metrics.LastUpdate >= self.UpdateInterval then
@@ -59,22 +76,65 @@ function PerformanceMonitor:StartMonitoring()
             self.Metrics.MemoryUsage = collectgarbage("count") / 1024
             self.Metrics.ElementCount = self:CountActiveElements()
             self.Metrics.LastUpdate = currentTime
+            
+            if self.Metrics.MemoryUsage > self.Metrics.PeakMemory then
+                self.Metrics.PeakMemory = self.Metrics.MemoryUsage
+            end
+            
+            local totalRender = 0
+            for _, rt in ipairs(renderTimes) do
+                totalRender = totalRender + rt
+            end
+            self.Metrics.AverageRenderTime = #renderTimes > 0 and (totalRender / #renderTimes) or 0
         end
     end)
     
     table.insert(self.Connections, connection)
 end
 
+function PerformanceMonitor:CheckThresholds()
+    if not self.Core then return end
+    
+    if self.Metrics.MemoryUsage >= self.AlertThresholds.CriticalMemory then
+        warn("🚨 CRITICAL: Memory usage", self.Metrics.MemoryUsage, "MB")
+        if self.Core.PerformCleanup then
+            self.Core:PerformCleanup()
+        end
+    elseif self.Metrics.MemoryUsage >= self.AlertThresholds.WarningMemory then
+        warn("⚠️ WARNING: High memory usage", self.Metrics.MemoryUsage, "MB")
+    end
+    
+    if self.Metrics.FPS <= self.AlertThresholds.CriticalFPS then
+        warn("🚨 CRITICAL: Low FPS", self.Metrics.FPS)
+    elseif self.Metrics.FPS <= self.AlertThresholds.WarningFPS then
+        warn("⚠️ WARNING: FPS dropping", self.Metrics.FPS)
+    end
+end
+
 function PerformanceMonitor:UpdateHistory()
     if #self.MemoryHistory >= self.MaxHistorySize then
         table.remove(self.MemoryHistory, 1)
     end
-    table.insert(self.MemoryHistory, self.Metrics.MemoryUsage)
+    table.insert(self.MemoryHistory, {
+        value = self.Metrics.MemoryUsage,
+        timestamp = os.time()
+    })
     
     if #self.FPSHistory >= self.MaxHistorySize then
         table.remove(self.FPSHistory, 1)
     end
-    table.insert(self.FPSHistory, self.Metrics.FPS)
+    table.insert(self.FPSHistory, {
+        value = self.Metrics.FPS,
+        timestamp = os.time()
+    })
+    
+    if #self.RenderHistory >= self.MaxHistorySize then
+        table.remove(self.RenderHistory, 1)
+    end
+    table.insert(self.RenderHistory, {
+        value = self.Metrics.RenderTime,
+        timestamp = os.time()
+    })
 end
 
 function PerformanceMonitor:CountActiveElements()
@@ -95,7 +155,9 @@ function PerformanceMonitor:GetMetrics()
     return {
         FPS = self.Metrics.FPS,
         RenderTime = math.floor(self.Metrics.RenderTime * 100) / 100,
+        AverageRenderTime = math.floor(self.Metrics.AverageRenderTime * 100) / 100,
         MemoryUsage = math.floor(self.Metrics.MemoryUsage * 100) / 100,
+        PeakMemory = math.floor(self.Metrics.PeakMemory * 100) / 100,
         ElementCount = self.Metrics.ElementCount
     }
 end
@@ -116,86 +178,139 @@ function PerformanceMonitor:GetDetailedMetrics()
     end
     
     metrics.PoolStats = poolStats
-    metrics.MemoryHistory = self.MemoryHistory
-    metrics.FPSHistory = self.FPSHistory
+    metrics.MemoryTrend = self:CalculateTrend(self.MemoryHistory)
+    metrics.FPSTrend = self:CalculateTrend(self.FPSHistory)
     
     return metrics
 end
 
-function PerformanceMonitor:GetMemoryChart()
-    if #self.MemoryHistory == 0 then
-        return "No data available"
+function PerformanceMonitor:CalculateTrend(history)
+    if #history < 10 then return "Insufficient data" end
+    
+    local recent = {}
+    for i = math.max(1, #history - 9), #history do
+        table.insert(recent, history[i].value)
     end
     
-    local maxMem = math.max(table.unpack(self.MemoryHistory))
-    local chart = "Memory Usage (MB)\n"
-    
-    for i = math.max(1, #self.MemoryHistory - 20), #self.MemoryHistory do
-        local mem = self.MemoryHistory[i]
-        local bars = math.floor((mem / maxMem) * 20)
-        chart = chart .. string.format("%.1f |%s\n", mem, string.rep("█", bars))
+    local sum = 0
+    for _, v in ipairs(recent) do
+        sum = sum + v
     end
+    local avg = sum / #recent
     
-    return chart
+    local currentAvg = (recent[#recent] + recent[#recent - 1]) / 2
+    
+    if currentAvg > avg * 1.1 then
+        return "Increasing ↑"
+    elseif currentAvg < avg * 0.9 then
+        return "Decreasing ↓"
+    else
+        return "Stable →"
+    end
 end
 
-function PerformanceMonitor:GetFPSChart()
-    if #self.FPSHistory == 0 then
-        return "No data available"
+function PerformanceMonitor:GetHealthReport()
+    local metrics = self:GetMetrics()
+    local report = {
+        Status = "Excellent",
+        Score = 100,
+        Issues = {},
+        Recommendations = {},
+        Details = {}
+    }
+    
+    if metrics.FPS < self.AlertThresholds.CriticalFPS then
+        report.Status = "Critical"
+        report.Score = math.max(0, report.Score - 40)
+        table.insert(report.Issues, "Critical FPS: " .. metrics.FPS .. " (target: 60)")
+        table.insert(report.Recommendations, "Close background applications")
+        table.insert(report.Recommendations, "Reduce graphics quality")
+    elseif metrics.FPS < self.AlertThresholds.WarningFPS then
+        report.Status = "Warning"
+        report.Score = math.max(0, report.Score - 20)
+        table.insert(report.Issues, "Low FPS: " .. metrics.FPS)
+        table.insert(report.Recommendations, "Optimize visual effects")
     end
     
-    local maxFPS = math.max(table.unpack(self.FPSHistory))
-    local chart = "FPS History\n"
-    
-    for i = math.max(1, #self.FPSHistory - 20), #self.FPSHistory do
-        local fps = self.FPSHistory[i]
-        local bars = math.floor((fps / maxFPS) * 20)
-        chart = chart .. string.format("%3d |%s\n", fps, string.rep("█", bars))
+    if metrics.MemoryUsage > self.AlertThresholds.CriticalMemory then
+        report.Status = "Critical"
+        report.Score = math.max(0, report.Score - 40)
+        table.insert(report.Issues, "Critical memory: " .. metrics.MemoryUsage .. "MB")
+        table.insert(report.Recommendations, "Run garbage collection")
+        table.insert(report.Recommendations, "Clear object pools")
+    elseif metrics.MemoryUsage > self.AlertThresholds.WarningMemory then
+        if report.Status == "Excellent" then
+            report.Status = "Warning"
+        end
+        report.Score = math.max(0, report.Score - 15)
+        table.insert(report.Issues, "High memory: " .. metrics.MemoryUsage .. "MB")
+        table.insert(report.Recommendations, "Monitor memory usage")
     end
     
-    return chart
+    if metrics.RenderTime > 16.67 then
+        report.Score = math.max(0, report.Score - 10)
+        table.insert(report.Issues, "High render time: " .. metrics.RenderTime .. "ms")
+        table.insert(report.Recommendations, "Reduce active elements")
+    end
+    
+    if metrics.ElementCount > 150 then
+        report.Score = math.max(0, report.Score - 10)
+        table.insert(report.Issues, "High element count: " .. metrics.ElementCount)
+        table.insert(report.Recommendations, "Use lazy rendering")
+    end
+    
+    report.Details = {
+        FPS = metrics.FPS,
+        Memory = metrics.MemoryUsage,
+        PeakMemory = metrics.PeakMemory,
+        RenderTime = metrics.RenderTime,
+        Elements = metrics.ElementCount,
+        MemoryTrend = self:CalculateTrend(self.MemoryHistory),
+        FPSTrend = self:CalculateTrend(self.FPSHistory)
+    }
+    
+    if #report.Issues == 0 then
+        table.insert(report.Issues, "All systems optimal")
+        table.insert(report.Recommendations, "Performance is excellent")
+    end
+    
+    return report
 end
 
 function PerformanceMonitor:CreatePerformanceTab(window)
     if not window or not window.Tab then
-        warn("Invalid window object provided to CreatePerformanceTab")
+        warn("Invalid window object")
         return nil
     end
     
-    local perfTab = window:Tab("Performance", "")
+    local perfTab = window:Tab("Performance")
     
     perfTab:Section("Live Metrics")
     
     local fpsLabel = perfTab:Label("FPS: --")
     local memoryLabel = perfTab:Label("Memory: -- MB")
-    local renderLabel = perfTab:Label("Render Time: -- ms")
-    local elementsLabel = perfTab:Label("Active Elements: --")
+    local renderLabel = perfTab:Label("Render: -- ms")
+    local elementsLabel = perfTab:Label("Elements: --")
+    local peakMemLabel = perfTab:Label("Peak Memory: -- MB")
     
     local RunService = game:GetService("RunService")
-    
     local lastUpdate = 0
+    
     local connection = RunService.Heartbeat:Connect(function()
         local currentTime = tick()
         if currentTime - lastUpdate >= 1 then
-            local currentMetrics = self:GetMetrics()
+            local metrics = self:GetMetrics()
             
             pcall(function()
-                if fpsLabel and fpsLabel.Set then
-                    local fpsColor = currentMetrics.FPS >= 50 and "✓" or currentMetrics.FPS >= 30 and "⚠" or "✗"
-                    fpsLabel:Set(string.format("FPS: %d %s", currentMetrics.FPS, fpsColor))
-                end
+                local fpsIcon = metrics.FPS >= 50 and "✓" or metrics.FPS >= 30 and "⚠" or "✗"
+                fpsLabel:Set(string.format("FPS: %d %s", metrics.FPS, fpsIcon))
                 
-                if memoryLabel and memoryLabel.Set then
-                    memoryLabel:Set(string.format("Memory: %.2f MB", currentMetrics.MemoryUsage))
-                end
+                local memIcon = metrics.MemoryUsage < 250 and "✓" or metrics.MemoryUsage < 400 and "⚠" or "✗"
+                memoryLabel:Set(string.format("Memory: %.2f MB %s", metrics.MemoryUsage, memIcon))
                 
-                if renderLabel and renderLabel.Set then
-                    renderLabel:Set(string.format("Render: %.2f ms", currentMetrics.RenderTime))
-                end
-                
-                if elementsLabel and elementsLabel.Set then
-                    elementsLabel:Set(string.format("Elements: %d", currentMetrics.ElementCount))
-                end
+                renderLabel:Set(string.format("Render: %.2f ms (Avg: %.2f)", metrics.RenderTime, metrics.AverageRenderTime))
+                elementsLabel:Set(string.format("Elements: %d", metrics.ElementCount))
+                peakMemLabel:Set(string.format("Peak Memory: %.2f MB", metrics.PeakMemory))
             end)
             
             lastUpdate = currentTime
@@ -204,59 +319,36 @@ function PerformanceMonitor:CreatePerformanceTab(window)
     
     table.insert(self.Connections, connection)
     
-    perfTab:Section("Optimization Tools")
+    perfTab:Section("Optimization")
     
     perfTab:Button("Collect Garbage", function()
-        local beforeMem = collectgarbage("count")
+        local before = collectgarbage("count")
         collectgarbage("collect")
         task.wait(0.1)
-        local afterMem = collectgarbage("count")
-        local freed = math.floor((beforeMem - afterMem) / 1024 * 100) / 100
+        local after = collectgarbage("count")
+        local freed = (before - after) / 1024
         
-        print(string.format("Garbage collected: %.2f MB freed", freed))
+        print(string.format("GC: %.2f MB freed", freed))
         window:Notify("Performance", string.format("Freed %.2f MB", freed), 3)
     end)
     
-    perfTab:Button("Clear Object Pools", function()
-        if self.Core and self.Core.Performance and self.Core.Performance.ObjectPool then
-            local cleared = 0
-            for _, pool in pairs(self.Core.Performance.ObjectPool) do
-                if pool and pool.Inactive then
-                    cleared = cleared + #pool.Inactive
-                    for _, instance in ipairs(pool.Inactive) do
-                        pcall(function()
-                            instance:Destroy()
-                        end)
-                    end
-                    pool.Inactive = {}
-                end
-            end
-            print("Cleared", cleared, "pooled objects")
-            window:Notify("Performance", "Cleared " .. cleared .. " objects", 3)
+    perfTab:Button("Clear Pools", function()
+        if self.Core and self.Core.PerformCleanup then
+            self.Core:PerformCleanup()
+            window:Notify("Performance", "Pools cleared", 3)
         end
     end)
     
-    perfTab:Button("Reset Metrics", function()
-        self:Reset()
-        window:Notify("Performance", "Metrics reset", 2)
+    perfTab:Button("Reset Peak Memory", function()
+        self.Metrics.PeakMemory = self.Metrics.MemoryUsage
+        window:Notify("Performance", "Peak memory reset", 2)
     end)
-    
-    perfTab:Button("Show Memory Chart", function()
-        print(self:GetMemoryChart())
-        window:Notify("Performance", "Memory chart in console", 3)
-    end)
-    
-    perfTab:Button("Show FPS Chart", function()
-        print(self:GetFPSChart())
-        window:Notify("Performance", "FPS chart in console", 3)
-    end)
-    
-    perfTab:Section("Health Report")
     
     perfTab:Button("Generate Report", function()
         local report = self:GetHealthReport()
-        print("=== Performance Health Report ===")
+        print("=== Performance Report ===")
         print("Status:", report.Status)
+        print("Score:", report.Score .. "/100")
         print("\nIssues:")
         for _, issue in ipairs(report.Issues) do
             print("  •", issue)
@@ -265,36 +357,38 @@ function PerformanceMonitor:CreatePerformanceTab(window)
         for _, rec in ipairs(report.Recommendations) do
             print("  •", rec)
         end
-        print("================================")
+        print("\nDetails:")
+        print("  FPS:", report.Details.FPS, "-", report.Details.FPSTrend)
+        print("  Memory:", report.Details.Memory, "MB -", report.Details.MemoryTrend)
+        print("  Peak Memory:", report.Details.PeakMemory, "MB")
+        print("========================")
         
-        window:Notify("Health Report", "Status: " .. report.Status, 5)
+        window:Notify("Report", "Status: " .. report.Status .. " (" .. report.Score .. "/100)", 5)
     end)
     
     perfTab:Section("Settings")
     
-    perfTab:Toggle("Detailed Logging", false, function(enabled)
-        if enabled then
-            local detailed = self:GetDetailedMetrics()
-            print("=== Detailed Performance Stats ===")
-            print("FPS:", detailed.FPS)
-            print("Memory:", detailed.MemoryUsage, "MB")
-            print("Render Time:", detailed.RenderTime, "ms")
-            print("Active Elements:", detailed.ElementCount)
-            print("\nPool Statistics:")
-            for elementType, stats in pairs(detailed.PoolStats) do
-                print(string.format("  %s: %d active, %d pooled", elementType, stats.Active, stats.Inactive))
-            end
-            print("================================")
-        end
-    end)
-    
-    perfTab:Slider("Update Interval", 0.1, 2, self.UpdateInterval, function(value)
+    perfTab:Slider("Update Rate", 0.1, 2, self.UpdateInterval, function(value)
         self:SetUpdateInterval(value)
     end, "s")
     
-    perfTab:Slider("History Size", 10, 120, self.MaxHistorySize, function(value)
+    perfTab:Slider("History Size", 30, 300, self.MaxHistorySize, function(value)
         self.MaxHistorySize = math.floor(value)
     end, " samples")
+    
+    perfTab:Toggle("Auto Cleanup", false, function(enabled)
+        if enabled and self.Core then
+            task.spawn(function()
+                while enabled do
+                    task.wait(60)
+                    if self.Metrics.MemoryUsage > 200 then
+                        self.Core:PerformCleanup()
+                        collectgarbage("collect")
+                    end
+                end
+            end)
+        end
+    end)
     
     return perfTab
 end
@@ -317,85 +411,26 @@ function PerformanceMonitor:Reset()
         MemoryUsage = 0,
         ElementCount = 0,
         FPS = 0,
-        LastUpdate = 0
+        LastUpdate = 0,
+        PeakMemory = 0,
+        AverageRenderTime = 0
     }
     self.MemoryHistory = {}
     self.FPSHistory = {}
+    self.RenderHistory = {}
 end
 
 function PerformanceMonitor:Destroy()
-    for _, connection in ipairs(self.Connections) do
+    for _, connection in pairs(self.Connections) do
         pcall(function()
-            connection:Disconnect()
+            if connection and connection.Connected then
+                connection:Disconnect()
+            end
         end)
     end
-    self.Connections = {}
+    
+    self.Connections = setmetatable({}, {__mode = "v"})
     self.Initialized = false
-end
-
-function PerformanceMonitor:GetHealthReport()
-    local metrics = self:GetMetrics()
-    local report = {
-        Status = "Good",
-        Issues = {},
-        Recommendations = {}
-    }
-    
-    if metrics.FPS < 30 then
-        report.Status = "Critical"
-        table.insert(report.Issues, "Very low FPS detected (<30)")
-        table.insert(report.Recommendations, "Close other applications or reduce graphics settings")
-        table.insert(report.Recommendations, "Clear object pools and run garbage collection")
-    elseif metrics.FPS < 50 then
-        report.Status = report.Status == "Good" and "Fair" or report.Status
-        table.insert(report.Issues, "Low FPS detected (<50)")
-        table.insert(report.Recommendations, "Consider optimizing visual effects")
-    end
-    
-    if metrics.MemoryUsage > 500 then
-        report.Status = "Critical"
-        table.insert(report.Issues, "Very high memory usage (>500MB)")
-        table.insert(report.Recommendations, "Run garbage collection immediately")
-        table.insert(report.Recommendations, "Clear unused object pools")
-    elseif metrics.MemoryUsage > 250 then
-        if report.Status == "Good" then
-            report.Status = "Fair"
-        end
-        table.insert(report.Issues, "High memory usage (>250MB)")
-        table.insert(report.Recommendations, "Monitor memory usage trends")
-    end
-    
-    if metrics.RenderTime > 16.67 then
-        if report.Status == "Good" then
-            report.Status = "Fair"
-        end
-        table.insert(report.Issues, "High render time (>16ms, target 60 FPS)")
-        table.insert(report.Recommendations, "Reduce number of active UI elements")
-    end
-    
-    if metrics.ElementCount > 100 then
-        table.insert(report.Issues, "High number of active elements (>100)")
-        table.insert(report.Recommendations, "Use lazy rendering for off-screen elements")
-    end
-    
-    local avgMemory = 0
-    if #self.MemoryHistory > 0 then
-        for _, mem in ipairs(self.MemoryHistory) do
-            avgMemory = avgMemory + mem
-        end
-        avgMemory = avgMemory / #self.MemoryHistory
-        
-        if metrics.MemoryUsage > avgMemory * 1.5 then
-            table.insert(report.Issues, "Memory usage spiking above average")
-            table.insert(report.Recommendations, "Check for memory leaks")
-        end
-    end
-    
-    if #report.Issues == 0 then
-        table.insert(report.Issues, "No issues detected - performance is optimal")
-    end
-    
-    return report
 end
 
 function PerformanceMonitor:ExportMetrics()
@@ -403,7 +438,13 @@ function PerformanceMonitor:ExportMetrics()
         CurrentMetrics = self:GetMetrics(),
         DetailedMetrics = self:GetDetailedMetrics(),
         HealthReport = self:GetHealthReport(),
-        Timestamp = os.time()
+        History = {
+            Memory = self.MemoryHistory,
+            FPS = self.FPSHistory,
+            Render = self.RenderHistory
+        },
+        Timestamp = os.time(),
+        Version = self.Version
     }
 end
 
